@@ -1,0 +1,12 @@
+# The number of writer workers to start for the pool.
+# 0 means to calcluate the size based on the number of Eralng VM schedulers.
+writer_pool_size = 0
+
+# The retention period of the data
+data_retention = "7d"
+
+# The interval between garbage collection runs
+gc_interval = "1h"
+
+# Reader's batch size
+reader_batch_size = 5
