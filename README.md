@@ -15,7 +15,7 @@ The `w` prefix is added to unpair the PUBLISH and SUBSCRIBE topics so the messag
 
 This plugin implements exclusive consumption, meaning each queue can only have one active consumer at a time. This is optimized for high write rates where messages need to be processed by exactly one consumer.
 
-For shared consumption where multiple consumers can process messages from the same queue, ECS (Exclusive Compacted Shared) plugin will be released instead. ECS focuses on lower write rates, plus heavy fanout reads (the same message for many consumers).
+For shared consumption where multiple consumers can process messages from the same queue, SCQ (Shared Compacted Queue) plugin will be released instead. SCQ focuses on lower write rates, plus heavy fanout reads (the same message for many consumers).
 
 ## How It Differs from Retained Messages
 
