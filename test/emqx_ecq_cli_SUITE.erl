@@ -53,6 +53,49 @@ t_gc_after_config_change(Config) ->
         ok = stop_client(PubPid)
     end.
 
+t_inspect(Config) ->
+    N = 10,
+    {ok, PubPid} = start_publisher(),
+    UniqueID = random_clientid("sub-"),
+    Inspect1 = inspect(UniqueID),
+    ?assertMatch(
+        #{
+            <<"queue">> := <<"empty">>,
+            <<"acked">> := <<"none">>,
+            <<"last_ack_ts">> := <<"none">>
+        },
+        Inspect1
+    ),
+    try
+        ok = publish_batch(PubPid, N, UniqueID),
+        Inspect2 = inspect(UniqueID),
+        ?assertMatch(
+            #{
+                <<"queue">> := <<"[1,...,10]">>,
+                <<"acked">> := <<"none">>,
+                <<"last_ack_ts">> := <<"none">>
+            },
+            Inspect2
+        ),
+        {ok, SubPid} = start_subscriber(UniqueID),
+        try
+            _ = collect_messages(SubPid, N),
+            Inspect3 = inspect(UniqueID),
+            ?assertMatch(
+                #{
+                    <<"queue">> := <<"[1,...,10]">>,
+                    <<"acked">> := 10,
+                    <<"last_ack_ts">> := _
+                },
+                Inspect3
+            )
+        after
+            ok = stop_client(SubPid)
+        end
+    after
+        ok = stop_client(PubPid)
+    end.
+
 start_publisher() ->
     {ok, Pid} = emqtt:start_link([
         {host, mqtt_endpoint()}, {clientid, <<"ecq-publisher">>}, {proto_ver, v5}
@@ -61,10 +104,13 @@ start_publisher() ->
     {ok, Pid}.
 
 publish_batch(Pid, Count) ->
+    publish_batch(Pid, Count, <<"sub1">>).
+
+publish_batch(Pid, Count, SubClientID) ->
     Data = crypto:strong_rand_bytes(1024),
     lists:foreach(
         fun(I) ->
-            Topic = bin(["$ECQ/w/sub1/key", integer_to_binary(I)]),
+            Topic = bin(["$ECQ/w/", SubClientID, "/key", integer_to_binary(I)]),
             {ok, _} = emqtt:publish(Pid, Topic, Data, 1)
         end,
         lists:seq(1, Count)
@@ -137,7 +183,44 @@ update_plugin_config(PluginConfig, CtConfig) ->
 get_status() ->
     get_status(1).
 
+inspect(ClientID) ->
+    Out = os:cmd("../../../../scripts/cli 1 inspect " ++ binary_to_list(ClientID)),
+    ct:pal("Inspect: ~s", [Out]),
+    emqx_utils_json:decode(Out, [return_maps]).
+
 get_status(NodeId) ->
-    Out = os:cmd("../../../../scripts/cli.sh " ++ integer_to_list(NodeId) ++ " status"),
+    Out = os:cmd("../../../../scripts/cli " ++ integer_to_list(NodeId) ++ " status"),
     ct:pal("Status: ~s", [Out]),
     emqx_utils_json:decode(Out, [return_maps]).
+
+start_subscriber(SubClientID) ->
+    start_subscriber(SubClientID, []).
+
+start_subscriber(SubClientID, Opts) ->
+    Owner = self(),
+    MsgHandler = #{publish => fun(Msg) -> Owner ! {publish_received, self(), SubClientID, Msg} end},
+    Opts0 = [{clientid, SubClientID}, {proto_ver, v5}, {msg_handler, MsgHandler}],
+    {ok, Pid} = emqtt:start_link(Opts0 ++ Opts),
+    {ok, _} = emqtt:connect(Pid),
+    QoS = 1,
+    {ok, _, _} = emqtt:subscribe(Pid, sub_topic(SubClientID), QoS),
+    {ok, Pid}.
+
+sub_topic(SubClientID) ->
+    bin(["$ECQ/", SubClientID, "/#"]).
+
+collect_messages(Pid, N) ->
+    collect_messages(Pid, N, []).
+
+collect_messages(Pid, 0, Acc) ->
+    {ok, lists:reverse(Acc)};
+collect_messages(Pid, N, Acc) ->
+    receive
+        {publish_received, Pid, _SubClientID, Msg} ->
+            collect_messages(Pid, N - 1, [Msg | Acc])
+    after 10000 ->
+        error(timeout)
+    end.
+
+random_clientid(Prefix) ->
+    list_to_binary([Prefix, integer_to_list(erlang:system_time(millisecond))]).

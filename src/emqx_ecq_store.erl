@@ -19,7 +19,8 @@
 
 %% Observability
 -export([
-    status/0
+    status/0,
+    inspect/1
 ]).
 
 -export_type([msg/0]).
@@ -71,23 +72,66 @@ status() ->
     StateFirst = mnesia:dirty_first(?STATE_TAB),
     StateLast = mnesia:dirty_last(?STATE_TAB),
     #{
-        messages => case IndexFirst =:= ?EOT orelse IndexLast =:= ?EOT of
-            true ->
-                empty;
-            false ->
-                #{first => fmt_index_key(IndexFirst), last => fmt_index_key(IndexLast)}
-        end,
-        consumer_states => case StateFirst =:= ?EOT orelse StateLast =:= ?EOT of
-            true ->
-                empty;
-            false ->
-                #{first => StateFirst, last => StateLast}
-        end,
+        messages =>
+            case IndexFirst =:= ?EOT orelse IndexLast =:= ?EOT of
+                true ->
+                    empty;
+                false ->
+                    #{first => fmt_index_key(IndexFirst), last => fmt_index_key(IndexLast)}
+            end,
+        consumer_states =>
+            case StateFirst =:= ?EOT orelse StateLast =:= ?EOT of
+                true ->
+                    empty;
+                false ->
+                    #{first => StateFirst, last => StateLast}
+            end,
         number_of_queues => mnesia:table_info(?SEQNO_TAB, size)
     }.
 
 fmt_index_key(?INDEX_KEY(ClientID, Seqno)) ->
     #{clientid => ClientID, seqno => Seqno}.
+
+inspect(ClientID) ->
+    QueueRange = get_queue_range(ClientID),
+    case mnesia:dirty_read(?STATE_TAB, ClientID) of
+        [#?STATE_REC{acked = Acked, last_ack_ts = LastAckTs}] ->
+            #{acked => Acked, last_ack_ts => format_ts(LastAckTs), queue => QueueRange};
+        [] ->
+            #{acked => none, last_ack_ts => none, queue => QueueRange}
+    end.
+
+get_queue_range(ClientID) ->
+    MinSeqno =
+        case mnesia:dirty_next(?INDEX_TAB, min_index_key(ClientID)) of
+            ?INDEX_KEY(ClientID, Seqno1) ->
+                Seqno1;
+            _ ->
+                empty
+        end,
+    MaxSeqno =
+        case mnesia:dirty_prev(?INDEX_TAB, max_index_key(ClientID)) of
+            ?INDEX_KEY(ClientID, Seqno2) ->
+                Seqno2;
+            _ ->
+                empty
+        end,
+    format_queue_range(MinSeqno, MaxSeqno).
+
+format_queue_range(Min, Max) when Min =:= empty orelse Max =:= empty ->
+    empty;
+format_queue_range(Min, Min) ->
+    bin(io_lib:format("[~w]", [Min]));
+format_queue_range(Min, Max) when Min + 1 =:= Max ->
+    bin(io_lib:format("[~w,~w]", [Min, Max]));
+format_queue_range(Min, Max) ->
+    bin(io_lib:format("[~w,...,~w]", [Min, Max])).
+
+format_ts(Ts) ->
+    bin(calendar:system_time_to_rfc3339(Ts, [{unit, millisecond}])).
+
+bin(IoData) ->
+    iolist_to_binary(IoData).
 
 %% @doc Append a new message to a queue.
 %% 1. Allocate a new sequence number.

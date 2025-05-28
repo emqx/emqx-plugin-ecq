@@ -14,6 +14,8 @@ cmd(["gc"]) ->
     emqx_ecq_gc:run();
 cmd(["status"]) ->
     show_status();
+cmd(["inspect", ClientID]) ->
+    inspect(ClientID);
 cmd(_) ->
     emqx_ctl:usage(usages()).
 
@@ -43,11 +45,18 @@ usages() ->
     [
         usage(show_config),
         usage(gc),
-        usage(status)
+        usage(status),
+        usage(inspect)
     ].
 
 show_status() ->
     emqx_ctl:print("~s~n", [emqx_utils_json:encode(get_status())]).
+
+inspect(ClientID) ->
+    emqx_ctl:print("~s~n", [emqx_utils_json:encode(emqx_ecq_store:inspect(bin(ClientID)))]).
+
+bin(IoList) ->
+    iolist_to_binary(IoList).
 
 get_status() ->
     emqx_ecq_store:status().
@@ -61,4 +70,6 @@ usage(gc) ->
         "Run garbage collection on local node immediately.\n"
         "This command takes no effect on replicant nodes."};
 usage(status) ->
-    {"ecq status", "Show the status of the queues."}.
+    {"ecq status", "Show the status of the queues."};
+usage(inspect) ->
+    {"ecq inspect <clientid>", "Inspect the state of a consumer."}.

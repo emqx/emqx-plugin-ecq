@@ -27,8 +27,8 @@ ECQ is similar to retained messages. Below features are the main differences:
 ## Quick Start
 
 - Start EMQX cluster with plugin installed: `make run`
-- Mock consumer to subscribe ECQ topic: `./scripts/sub.sh 1`
-- Mock producer to publish messages to ECQ topic: `./scripts/send.sh`
+- Mock consumer to subscribe ECQ topic: `./scripts/sub 1`
+- Mock producer to publish messages to ECQ topic: `./scripts/pub`
 
 ## Data Storage
 
