@@ -43,8 +43,7 @@
     terminate/2
 ]).
 
--define(ECQ_SUB_TOPIC_PREFIX, "$ECQ").
--define(ECQ_PUB_TOPIC_PREFIX, "$ECQ/w").
+-define(ECQ_TOPIC_PREFIX, "$ECQ").
 -define(PROP_NAME_SEQNO, <<"ecq-seqno">>).
 
 %% @doc
@@ -83,7 +82,7 @@ unhook() ->
 on_message_publish(
     #message{
         timestamp = Ts,
-        topic = <<?ECQ_PUB_TOPIC_PREFIX, $/, ClientID_Key/binary>>,
+        topic = <<?ECQ_TOPIC_PREFIX, $/, $w, $/, ClientID_Key/binary>>,
         payload = Payload
     } = Message
 ) ->
@@ -96,6 +95,13 @@ on_message_publish(
             ?LOG(error, "failed_to_append_message", #{reason => Reason})
     end,
     {stop, do_not_allow_publish(Message)};
+on_message_publish(#message{topic = <<?ECQ_TOPIC_PREFIX, $/, Rest/binary>>} = Message) ->
+    %% Do not allow publishing directly to ECQ topics.
+    ?LOG(error, "not_allowed_to_publish_to_ecq_topic", #{
+        topic => Message#message.topic,
+        explain => "Mabye publish to $ECQ/w/" ++ binary_to_list(Rest) ++ " instead?"
+    }),
+    {stop, do_not_allow_publish(Message)};
 on_message_publish(Message) ->
     %% Other topics, non of our business, just pass it on.
     %% TODO: handle heartbeat
@@ -104,7 +110,7 @@ on_message_publish(Message) ->
 %% @doc
 %% Called when PUBACK is received from the subscriber (vehicle).
 on_delivery_completed(
-    #message{topic = <<?ECQ_SUB_TOPIC_PREFIX, $/, _/binary>>} = Message, _
+    #message{topic = <<?ECQ_TOPIC_PREFIX, $/, _/binary>>} = Message, _
 ) ->
     case get_seqno(Message) of
         error ->
@@ -121,7 +127,7 @@ on_delivery_completed(_, _) ->
 %% Handle subscription to ECQ topic.
 on_session_subscribed(
     #{clientid := ClientID},
-    <<?ECQ_SUB_TOPIC_PREFIX, $/, ClientID_Key/binary>>,
+    <<?ECQ_TOPIC_PREFIX, $/, ClientID_Key/binary>>,
     _SubOpts
 ) ->
     case parse_clientid_key(ClientID_Key) of
@@ -142,7 +148,7 @@ on_session_subscribed(_, _, _) ->
 on_authorize(
     #{clientid := ClientID},
     #{action_type := subscribe, qos := QoS},
-    <<?ECQ_SUB_TOPIC_PREFIX, $/, Suffix/binary>>,
+    <<?ECQ_TOPIC_PREFIX, $/, Suffix/binary>>,
     _DefaultResult
 ) ->
     case binary:split(Suffix, <<"/">>) of

@@ -68,6 +68,37 @@ t_late_subscribe(_Config) ->
         ok = stop_client(PubPid)
     end.
 
+t_direct_publish_to_ecq_topic_is_not_allowed(_Config) ->
+    {ok, PubPid} = start_publisher(),
+    SubClientID = random_clientid("sub-"),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    Key = <<"key/1">>,
+    try
+        %% This publish should not be sent to the subscriber (terminated by the plugin).
+        {ok, _} = emqtt:publish(PubPid, bin(["$ECQ/", SubClientID, "/", Key]), <<"data1">>, 1),
+        %% This publish should be sent to the subscriber.
+        {ok, _} = emqtt:publish(PubPid, bin(["normal/", SubClientID, "/", Key]), <<"data2">>, 1),
+        receive
+            {publish_received, SubPid, SubClientID, Msg} ->
+                ?assertMatch(#{qos := 1}, Msg),
+                ?assertEqual(<<"data2">>, maps:get(payload, Msg)),
+                Topic = maps:get(topic, Msg),
+                ExpectedTopic = bin(["normal/", SubClientID, "/", Key]),
+                ?assertEqual(ExpectedTopic, Topic)
+        after 10000 ->
+            ct:fail(#{reason => timeout})
+        end,
+        receive
+            {publish_received, SubPid, SubClientID, _Msg} ->
+                ct:fail(#{reason => "should not reach here"})
+        after 500 ->
+            ok
+        end
+    after
+        ok = stop_client(PubPid),
+        ok = stop_client(SubPid)
+    end.
+
 %% A subscriber disconnects, then reconnects with session persisted.
 %% It will not queue the message in its session state while it is offline.
 t_disconnected_session_does_not_queue_messages(_Config) ->
@@ -126,11 +157,15 @@ start_subscriber(SubClientID, Opts) ->
     {ok, Pid} = emqtt:start_link(Opts0 ++ Opts),
     {ok, _} = emqtt:connect(Pid),
     QoS = 1,
-    {ok, _, _} = emqtt:subscribe(Pid, sub_topic(SubClientID), QoS),
+    {ok, _, _} = emqtt:subscribe(Pid, sub_ecq_topic(SubClientID), QoS),
+    {ok, _, _} = emqtt:subscribe(Pid, sub_normal_topic(SubClientID), QoS),
     {ok, Pid}.
 
-sub_topic(SubClientID) ->
+sub_ecq_topic(SubClientID) ->
     bin(["$ECQ/", SubClientID, "/#"]).
+
+sub_normal_topic(SubClientID) ->
+    bin(["normal/", SubClientID, "/#"]).
 
 stop_client(Pid) ->
     unlink(Pid),
