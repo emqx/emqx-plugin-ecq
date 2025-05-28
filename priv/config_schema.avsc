@@ -49,6 +49,30 @@
         "label": "$reader_batch_size_label",
         "description": "$reader_batch_size_desc"
       }
+    },
+    {
+      "name": "write_timeout",
+      "type": "string",
+      "default": "5s",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$write_timeout_label",
+        "description": "$write_timeout_desc"
+      }
+    },
+    {
+      "name": "read_timeout",
+      "type": "string",
+      "default": "5s",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$read_timeout_label",
+        "description": "$read_timeout_desc"
+      }
     }
   ]
 }

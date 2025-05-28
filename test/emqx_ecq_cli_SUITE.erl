@@ -151,7 +151,9 @@ default_config() ->
         writer_pool_size => 0,
         gc_interval => <<"1h">>,
         data_retention => <<"7d">>,
-        reader_batch_size => 5
+        reader_batch_size => 5,
+        write_timeout => <<"5s">>,
+        read_timeout => <<"5s">>
     }.
 
 new_config() ->

@@ -51,7 +51,8 @@ append(ClientID, MsgKey, Payload, MsgTs) ->
     Req = #append_req{clientid = ClientID, msg_key = MsgKey, payload = Payload, msg_ts = MsgTs},
     case emqx_ecq_writer_dist:pick_core_node(ClientID) of
         {ok, Node} ->
-            try erpc:call(Node, ?MODULE, append_local, [Req], 5_000) of
+            Timeout = emqx_ecq_config:get_write_timeout() + 1000,
+            try erpc:call(Node, ?MODULE, append_local, [Req], Timeout) of
                 {ok, Seqno} ->
                     ?LOG(debug, "new_message_appended", #{subscriber => ClientID, seqno => Seqno}),
                     %% new message appended, notify the subscriber.
@@ -69,8 +70,7 @@ append(ClientID, MsgKey, Payload, MsgTs) ->
 %% @doc Handle RPC call to append a message to a queue.
 -spec append_local(#append_req{}) -> {ok, seqno()} | {error, Reason :: term()}.
 append_local(#append_req{clientid = ClientID} = Req) ->
-    %% TODO: configurable timeout
-    Timeout = 5000,
+    Timeout = emqx_ecq_config:get_write_timeout(),
     Deadline = now_ts() + Timeout,
     WriterPid = gproc_pool:pick_worker(?WRITER_POOL, ClientID),
     try

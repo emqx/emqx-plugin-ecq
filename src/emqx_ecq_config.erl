@@ -12,7 +12,9 @@
     get_data_retention/0,
     get_gc_interval/0,
     my_role/0,
-    get_reader_batch_size/0
+    get_reader_batch_size/0,
+    get_write_timeout/0,
+    get_read_timeout/0
 ]).
 
 -include("emqx_ecq.hrl").
@@ -60,6 +62,16 @@ get_gc_interval() ->
 get_reader_batch_size() ->
     maps:get(reader_batch_size, get()).
 
+%% @doc Get the write timeout.
+-spec get_write_timeout() -> integer().
+get_write_timeout() ->
+    maps:get(write_timeout, get()).
+
+%% @doc Get the read timeout.
+-spec get_read_timeout() -> integer().
+get_read_timeout() ->
+    maps:get(read_timeout, get()).
+
 parse(<<"data_retention">>, Str) ->
     {data_retention, to_duration_ms(Str)};
 parse(<<"gc_interval">>, Str) ->
@@ -71,7 +83,11 @@ parse(<<"reader_batch_size">>, Size) ->
     %% 32 is the default Receive-Maximum for EMQX
     Size =< 0 andalso throw("reader_batch_size_must_be_positive"),
     Size >= 32 andalso throw("reader_batch_size_must_be_less_than_32"),
-    {reader_batch_size, Size}.
+    {reader_batch_size, Size};
+parse(<<"write_timeout">>, Str) ->
+    {write_timeout, to_duration_ms(Str)};
+parse(<<"read_timeout">>, Str) ->
+    {read_timeout, to_duration_ms(Str)}.
 
 to_duration_ms(Str) ->
     case hocon_postprocess:duration(Str) of

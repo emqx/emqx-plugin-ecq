@@ -94,12 +94,13 @@ heartbeat() ->
 
 heartbeat2(SubPid, LastAcked, LastTs) ->
     HbTs = get(?LAST_HEARTBEAT_TS),
-    MaxTs = case HbTs of
-        undefined ->
-            LastTs;
-        _ ->
-            max(HbTs, LastTs)
-    end,
+    MaxTs =
+        case HbTs of
+            undefined ->
+                LastTs;
+            _ ->
+                max(HbTs, LastTs)
+        end,
     case now_ts() - MaxTs > ?HEARTBEAT_POLL_INTERVAL of
         true ->
             heartbeat3(SubPid, LastAcked);
@@ -215,25 +216,29 @@ pub_topic(ClientID, MsgKey) ->
 
 handle_poll_notification(LastAcked, #{clientid := ClientID, sub_pid := SubPid}) ->
     Batch =
-        case emqx_ecq_config:my_role() of
-            core ->
-                handle_poll_local(ClientID, LastAcked);
-            _ ->
-                case emqx_ecq_writer_dist:pick_core_node(ClientID) of
-                    {ok, Node} ->
-                        rpc_call(Node, ?MODULE, handle_poll_local, [ClientID, LastAcked]);
-                    {error, no_running_core_nodes} ->
-                        ?LOG(warning, "no_running_core_nodes", #{})
-                end
+        case emqx_ecq_writer_dist:pick_core_node(ClientID) of
+            {ok, Node} ->
+                rpc_call(Node, ?MODULE, handle_poll_local, [ClientID, LastAcked]);
+            {error, no_running_core_nodes} ->
+                ?LOG(warning, "no_running_core_nodes", #{
+                    explain => "will trigger a retry later when the subscriber sends any PUBACK"
+                })
         end,
     ok = deliver_batch(ClientID, SubPid, Batch).
 
 rpc_call(Node, M, F, A) ->
+    Timeout = emqx_ecq_config:get_read_timeout(),
     try
-        erpc:call(Node, M, F, A, 5_000)
+        erpc:call(Node, M, F, A, Timeout)
     catch
         C:E ->
-            {error, #{exception => C, cause => E}}
+            ?LOG(warning, "failed_to_read_batch", #{
+                node => Node,
+                exception => C,
+                cause => E,
+                explain => "will trigger a retry later when the subscriber sends any PUBACK"
+            }),
+            ok
     end.
 
 %% @doc Handle poll notification on the core node.

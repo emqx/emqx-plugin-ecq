@@ -10,3 +10,9 @@ gc_interval = "1h"
 
 # Reader's batch size
 reader_batch_size = 5
+
+# write timeout
+write_timeout = "5s"
+
+# read timeout
+read_timeout = "5s"
