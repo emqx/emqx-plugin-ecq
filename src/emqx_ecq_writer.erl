@@ -86,7 +86,11 @@ append_local(#append_req{clientid = ClientID} = Req) ->
 
 init([Pool, Id]) ->
     true = gproc_pool:connect_worker(Pool, {Pool, Id}),
-    {ok, #{pool => Pool, id => Id}}.
+    {ok, #{pool => Pool, id => Id}, {continue, wait_for_tables}}.
+
+handle_continue(wait_for_tables, State) ->
+    emqx_ecq_store:wait_for_tables(),
+    {noreply, State}.
 
 handle_call(#append_req{} = Req, _From, State) ->
     case now_ts() > Req#append_req.deadline of
@@ -104,9 +108,6 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(_Info, State) ->
-    {noreply, State}.
-
-handle_continue(_Continue, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->

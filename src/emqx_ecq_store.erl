@@ -6,7 +6,8 @@
 
 %% Bootstrapping
 -export([
-    create_tables/0
+    create_tables/0,
+    wait_for_tables/0
 ]).
 
 %% Runtime
@@ -63,8 +64,10 @@ create_tables() ->
         {storage, rocksdb_copies},
         {record_name, ?PAYLOAD_REC},
         {attributes, record_info(fields, ?PAYLOAD_REC)}
-    ]),
-    ok = mria:wait_for_tables([?SEQNO_TAB, ?INDEX_TAB, ?PAYLOAD_TAB]).
+    ]).
+
+wait_for_tables() ->
+    ok = mria:wait_for_tables([?SEQNO_TAB, ?INDEX_TAB, ?PAYLOAD_TAB, ?STATE_TAB]).
 
 status() ->
     IndexFirst = mnesia:dirty_first(?INDEX_TAB),
