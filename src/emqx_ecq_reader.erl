@@ -34,6 +34,7 @@
 }).
 
 -type msg() :: emqx_ecq_store:msg().
+-define(LAST_HEARTBEAT_TS, ecq_last_heartbeat_ts).
 
 %% @doc Start one agent process.
 start_link(ClientID, SubPid) ->
@@ -92,7 +93,14 @@ heartbeat() ->
     end.
 
 heartbeat2(SubPid, LastAcked, LastTs) ->
-    case now_ts() - LastTs > ?HEARTBEAT_POLL_INTERVAL of
+    HbTs = get(?LAST_HEARTBEAT_TS),
+    MaxTs = case HbTs of
+        undefined ->
+            LastTs;
+        _ ->
+            max(HbTs, LastTs)
+    end,
+    case now_ts() - MaxTs > ?HEARTBEAT_POLL_INTERVAL of
         true ->
             heartbeat3(SubPid, LastAcked);
         false ->
@@ -105,6 +113,7 @@ heartbeat3(SubPid, LastAcked) ->
             %% There is inflight messages, wait for ack to trigger the next poll.
             ok;
         false ->
+            put(?LAST_HEARTBEAT_TS, now_ts()),
             notify_poll(LastAcked)
     end.
 
