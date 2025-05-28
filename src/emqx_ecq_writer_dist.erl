@@ -9,7 +9,7 @@
 
 %% API
 -export([
-    start_link/1,
+    start_link/0,
     pick_core_node/1
 ]).
 
@@ -33,16 +33,16 @@
 %% The core nodes will always write locally.
 %% This means race condition between the core node writers,
 %% The risk is low as we do not expect concurrent writes for the same clientid.
--spec start_link(atom()) -> {ok, pid()}.
-start_link(MyRole) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [MyRole], []).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-init([MyRole]) ->
+init([]) ->
     process_flag(trap_exit, true),
     ok = ekka:monitor(membership),
-    ok = update_rpc_candidates(MyRole),
+    ok = update_rpc_candidates(),
     erlang:start_timer(?TICK_INTERVAL, self(), tick),
-    {ok, #{role => MyRole}}.
+    {ok, #{}}.
 
 handle_call(Req, _From, State) ->
     ?LOG(error, "unexpected_call", #{server => ?MODULE, call => Req}),
@@ -52,12 +52,12 @@ handle_cast(Msg, State) ->
     ?LOG(error, "unexpected_cast", #{server => ?MODULE, cast => Msg}),
     {noreply, State}.
 
-handle_info({timeout, _, tick}, #{role := MyRole} = State) ->
+handle_info({timeout, _, tick}, #{} = State) ->
     erlang:start_timer(?TICK_INTERVAL, self(), tick),
-    ok = update_rpc_candidates(MyRole),
+    ok = update_rpc_candidates(),
     {noreply, State};
-handle_info({membership, _}, #{role := MyRole} = State) ->
-    ok = update_rpc_candidates(MyRole),
+handle_info({membership, _}, #{} = State) ->
+    ok = update_rpc_candidates(),
     {noreply, State};
 handle_info(Info, State) ->
     ?LOG(error, "unexpected_info", #{server => ?MODULE, info => Info}),
@@ -69,9 +69,9 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-update_rpc_candidates(MyRole) ->
+update_rpc_candidates() ->
     Cached = persistent_term:get(?PT_CACHE_KEY, #{}),
-    NewMap = build_rpc_candidates(MyRole),
+    NewMap = build_rpc_candidates(emqx_ecq_config:my_role()),
     case Cached =:= NewMap of
         true ->
             ok;
@@ -81,8 +81,8 @@ update_rpc_candidates(MyRole) ->
     ok.
 
 build_rpc_candidates(core) ->
-    #{1 => node()};
-build_rpc_candidates(_NotCore) ->
+    local;
+build_rpc_candidates(_) ->
     Nodes = lists:sort(mria_membership:running_core_nodelist()),
     Count = length(Nodes),
     Ids = lists:seq(1, Count),
@@ -90,11 +90,15 @@ build_rpc_candidates(_NotCore) ->
 
 %% @doc Pick a core node for the given client ID.
 pick_core_node(ClientId) ->
-    Nodes = persistent_term:get(?PT_CACHE_KEY),
-    case maps:size(Nodes) > 0 of
-        true ->
-            Key = erlang:phash2(ClientId) rem maps:size(Nodes) + 1,
-            {ok, maps:get(Key, Nodes)};
-        false ->
-            {error, no_running_core_nodes}
+    case persistent_term:get(?PT_CACHE_KEY) of
+        local ->
+            {ok, node()};
+        Nodes ->
+            case maps:size(Nodes) > 0 of
+                true ->
+                    Key = erlang:phash2(ClientId) rem maps:size(Nodes) + 1,
+                    {ok, maps:get(Key, Nodes)};
+                false ->
+                    {error, no_running_core_nodes}
+            end
     end.

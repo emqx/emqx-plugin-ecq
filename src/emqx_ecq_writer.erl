@@ -51,13 +51,16 @@ append(ClientID, MsgKey, Payload, MsgTs) ->
     Req = #append_req{clientid = ClientID, msg_key = MsgKey, payload = Payload, msg_ts = MsgTs},
     case emqx_ecq_writer_dist:pick_core_node(ClientID) of
         {ok, Node} ->
-            case erpc:call(Node, ?MODULE, append_local, [Req], 5_000) of
+            try erpc:call(Node, ?MODULE, append_local, [Req], 5_000) of
                 {ok, Seqno} ->
                     ?LOG(debug, "new_message_appended", #{subscriber => ClientID, seqno => Seqno}),
                     %% new message appended, notify the subscriber.
                     maybe_notify_reader(ClientID);
                 {error, Reason} ->
                     {error, Reason}
+            catch
+                C:E ->
+                    {error, #{exception => C, cause => E}}
             end;
         {error, Reason} ->
             {error, Reason}

@@ -33,7 +33,7 @@ init([MyRole]) ->
     },
     ClusterWatchChildSpec = #{
         id => emqx_ecq_writer_dist,
-        start => {emqx_ecq_writer_dist, start_link, [MyRole]},
+        start => {emqx_ecq_writer_dist, start_link, []},
         restart => permanent,
         shutdown => 5000,
         type => worker,

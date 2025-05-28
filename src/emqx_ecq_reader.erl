@@ -212,12 +212,20 @@ handle_poll_notification(LastAcked, #{clientid := ClientID, sub_pid := SubPid}) 
             _ ->
                 case emqx_ecq_writer_dist:pick_core_node(ClientID) of
                     {ok, Node} ->
-                        erpc:call(Node, ?MODULE, handle_poll_local, [ClientID, LastAcked]);
+                        rpc_call(Node, ?MODULE, handle_poll_local, [ClientID, LastAcked]);
                     {error, no_running_core_nodes} ->
                         ?LOG(warning, "no_running_core_nodes", #{})
                 end
         end,
     ok = deliver_batch(ClientID, SubPid, Batch).
+
+rpc_call(Node, M, F, A) ->
+    try
+        erpc:call(Node, M, F, A, 5_000)
+    catch
+        C:E ->
+            {error, #{exception => C, cause => E}}
+    end.
 
 %% @doc Handle poll notification on the core node.
 -spec handle_poll_local(clientid(), ?NO_ACK | seqno()) -> [msg()].
