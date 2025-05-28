@@ -66,9 +66,10 @@ create_tables() ->
     ok = mria:wait_for_tables([?SEQNO_TAB, ?INDEX_TAB, ?PAYLOAD_TAB]).
 
 status() ->
+    {Total, Details} = memory_usage(),
     #{
-        memory_usage => memory_usage(),
-        total_messages => mnesia:table_info(?INDEX_TAB, size),
+        memory_usage => #{total => words_to_kmg(Total), details => Details},
+        messages => mnesia:table_info(?INDEX_TAB, size),
         consumers => consumers()
     }.
 
@@ -79,12 +80,15 @@ consumers() ->
     }.
 
 memory_usage() ->
-    WordSize = erlang:system_info(wordsize),
-    #{
-        index => mnesia:table_info(?INDEX_TAB, memory) * WordSize,
-        state => mnesia:table_info(?STATE_TAB, memory) * WordSize,
-        seqno => mnesia:table_info(?SEQNO_TAB, memory) * WordSize
-    }.
+    Index = mnesia:table_info(?INDEX_TAB, memory),
+    State = mnesia:table_info(?STATE_TAB, memory),
+    Seqno = mnesia:table_info(?SEQNO_TAB, memory),
+    Total = Index + State + Seqno,
+    {Total, #{
+        index => words_to_kmg(Index),
+        state => words_to_kmg(State),
+        seqno => words_to_kmg(Seqno)
+    }}.
 
 %% @doc Append a new message to a queue.
 %% 1. Allocate a new sequence number.
@@ -296,3 +300,22 @@ gc_payload_loop(_, _, _) ->
     %% 1. Another clientid, or the end of the table.
     %% 2. The key is not expired (and the rest, if any, are likely not expired).
     ok.
+
+-define(KB, 1024).
+-define(MB, (1024 * 1024)).
+-define(GB, (1024 * 1024 * 1024)).
+
+kmg(Bytes) when Bytes > ?GB ->
+    kmg(Bytes / ?GB, "GB");
+kmg(Bytes) when Bytes > ?MB ->
+    kmg(Bytes / ?MB, "MB");
+kmg(Bytes) when Bytes > ?KB ->
+    kmg(Bytes / ?KB, "KB");
+kmg(Bytes) ->
+    integer_to_binary(Bytes).
+
+kmg(F, S) ->
+    iolist_to_binary(io_lib:format("~.1f~ts", [F, S])).
+
+words_to_kmg(Words) ->
+    kmg(Words * erlang:system_info(wordsize)).
