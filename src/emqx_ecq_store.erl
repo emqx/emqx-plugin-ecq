@@ -45,14 +45,14 @@ create_tables() ->
     ok = mria:create_table(?STATE_TAB, [
         {type, ordered_set},
         {rlog_shard, ?DB_SHARD},
-        {storage, disc_copies},
+        {storage, rocksdb_copies},
         {record_name, ?STATE_REC},
         {attributes, record_info(fields, ?STATE_REC)}
     ]),
     ok = mria:create_table(?INDEX_TAB, [
         {type, ordered_set},
         {rlog_shard, ?DB_SHARD},
-        {storage, disc_copies},
+        {storage, rocksdb_copies},
         {record_name, ?INDEX_REC},
         {attributes, record_info(fields, ?INDEX_REC)}
     ]),
@@ -66,29 +66,28 @@ create_tables() ->
     ok = mria:wait_for_tables([?SEQNO_TAB, ?INDEX_TAB, ?PAYLOAD_TAB]).
 
 status() ->
-    {Total, Details} = memory_usage(),
+    IndexFirst = mnesia:dirty_first(?INDEX_TAB),
+    IndexLast = mnesia:dirty_last(?INDEX_TAB),
+    StateFirst = mnesia:dirty_first(?STATE_TAB),
+    StateLast = mnesia:dirty_last(?STATE_TAB),
     #{
-        memory_usage => #{total => words_to_kmg(Total), details => Details},
-        messages => mnesia:table_info(?INDEX_TAB, size),
-        consumers => consumers()
+        messages => case IndexFirst =:= ?EOT orelse IndexLast =:= ?EOT of
+            true ->
+                empty;
+            false ->
+                #{first => fmt_index_key(IndexFirst), last => fmt_index_key(IndexLast)}
+        end,
+        consumer_states => case StateFirst =:= ?EOT orelse StateLast =:= ?EOT of
+            true ->
+                empty;
+            false ->
+                #{first => StateFirst, last => StateLast}
+        end,
+        number_of_queues => mnesia:table_info(?SEQNO_TAB, size)
     }.
 
-consumers() ->
-    #{
-        state => mnesia:table_info(?STATE_TAB, size),
-        seqno => mnesia:table_info(?SEQNO_TAB, size)
-    }.
-
-memory_usage() ->
-    Index = mnesia:table_info(?INDEX_TAB, memory),
-    State = mnesia:table_info(?STATE_TAB, memory),
-    Seqno = mnesia:table_info(?SEQNO_TAB, memory),
-    Total = Index + State + Seqno,
-    {Total, #{
-        index => words_to_kmg(Index),
-        state => words_to_kmg(State),
-        seqno => words_to_kmg(Seqno)
-    }}.
+fmt_index_key(?INDEX_KEY(ClientID, Seqno)) ->
+    #{clientid => ClientID, seqno => Seqno}.
 
 %% @doc Append a new message to a queue.
 %% 1. Allocate a new sequence number.
@@ -300,22 +299,3 @@ gc_payload_loop(_, _, _) ->
     %% 1. Another clientid, or the end of the table.
     %% 2. The key is not expired (and the rest, if any, are likely not expired).
     ok.
-
--define(KB, 1024).
--define(MB, (1024 * 1024)).
--define(GB, (1024 * 1024 * 1024)).
-
-kmg(Bytes) when Bytes > ?GB ->
-    kmg(Bytes / ?GB, "GB");
-kmg(Bytes) when Bytes > ?MB ->
-    kmg(Bytes / ?MB, "MB");
-kmg(Bytes) when Bytes > ?KB ->
-    kmg(Bytes / ?KB, "KB");
-kmg(Bytes) ->
-    integer_to_binary(Bytes).
-
-kmg(F, S) ->
-    iolist_to_binary(io_lib:format("~.1f~ts", [F, S])).
-
-words_to_kmg(Words) ->
-    kmg(Words * erlang:system_info(wordsize)).

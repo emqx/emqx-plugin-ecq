@@ -38,16 +38,17 @@ t_gc_after_config_change(Config) ->
         ok = publish_batch(PubPid, 10),
         Status1 = get_status(),
         StatusRepl = get_status(3),
-        ?assert(maps:get(<<"messages">>, Status1) >= 10),
+        ?assertMatch(#{<<"first">> := _}, maps:get(<<"messages">>, Status1)),
         %% data is not replicated to replicant nodes
-        ?assertEqual(0, maps:get(<<"messages">>, StatusRepl)),
+        ?assertEqual(<<"empty">>, maps:get(<<"messages">>, StatusRepl)),
         PluginConfig = new_config(),
+        timer:sleep(1000),
         ok = update_plugin_config(PluginConfig, Config),
         %% ensure ids and data are expired
         %% see new_config/0 for gc_interval and data_retention
         timer:sleep(1000),
         Status2 = get_status(),
-        ?assertEqual(0, maps:get(<<"messages">>, Status2))
+        ?assertEqual(<<"empty">>, maps:get(<<"messages">>, Status2))
     after
         ok = stop_client(PubPid)
     end.
