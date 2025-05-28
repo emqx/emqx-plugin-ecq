@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Mock application to publish messages to ECQ topic
+
+set -euo pipefail
+
+DATA="Testdata $(date)"
+
+pub() {
+    clientid="$1"
+    key="$2"
+    mqttx pub -h 127.0.0.1 -p 1883 -t "\$ECQ/w/$clientid/$key" -m "$DATA"
+}
+
+pub client1 key1
+pub client2 key1
+pub client2 key2
+pub client3 key1
+pub client3 key2
+pub client3 key3
+
+echo "Sent $DATA to "
+echo "  client1: key1"
+echo "  client2: key1, key2"
+echo "  client3: key1, key2, key3"

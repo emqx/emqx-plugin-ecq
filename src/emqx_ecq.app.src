@@ -1,0 +1,9 @@
+{application, emqx_ecq, [
+    {description, "Exclusive Compacted Queue of EMQX"},
+    {vsn, git},
+    {modules, []},
+    {registered, [emqx_ecq_sup]},
+    {applications, [kernel, stdlib, emqx_plugin_helper]},
+    {mod, {emqx_ecq_app, []}},
+    {env, []}
+]}.
