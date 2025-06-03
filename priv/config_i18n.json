@@ -1,0 +1,38 @@
+{
+  "$writer_pool_size_label": {
+    "en": "Pool Size"
+  },
+  "$writer_pool_size_desc": {
+    "en": "The size of writer worker process pool. The default value 0 means to use the number of Erlang schedulers. Greater number means it can perform more writer work concurrently."
+  },
+  "$data_retention_label": {
+    "en": "Data Retention"
+  },
+  "$data_retention_desc": {
+    "en": "The retention period of fanout data. The default value is 7d."
+  },
+  "$gc_interval_label": {
+    "en": "Garbage Collection Interval"
+  },
+  "$gc_interval_desc": {
+    "en": "The interval between garbage collection runs. The default value is 1h. If this config is updated on the fly, an immediate garbage collection will be triggered, followed by a new timer with the new interval."
+  },
+  "$reader_batch_size_label": {
+    "en": "Reader Batch Size"
+  },
+  "$reader_batch_size_desc": {
+    "en": "The number of messages to read in each batch. The default value is 5. A larger batch size means less communication between nodes, but also higher latency. It should not be too large, otherwise it may fill the MQTT message flight window and increase the latency of other subscriptions."
+  },
+  "$write_timeout_label": {
+    "en": "Write Timeout"
+  },
+  "$write_timeout_desc": {
+    "en": "The timeout for write operations. The default value is 5s. May happen when there are too many concurrent write operations. The publisher will be blocked until the write operation is completed or timed out. Message is dropped if timed out. Increasing this value may result in publisher client's responsiveness degraded."
+  },
+  "$read_timeout_label": {
+    "en": "Read Timeout"
+  },
+  "$read_timeout_desc": {
+    "en": "The timeout for read operations. The default value is 5s. May happen when there are too many concurrent read operations. If timed out when trying to read a batch of messages, no message will be delivered to the subscriber. The read will be retried later."
+  }
+}

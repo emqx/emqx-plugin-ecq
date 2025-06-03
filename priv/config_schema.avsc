@@ -1,0 +1,78 @@
+{
+  "type": "record",
+  "name": "ExtendedConfig",
+  "fields": [
+    {
+      "name": "writer_pool_size",
+      "type": "int",
+      "default": 0,
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$pool_size_label",
+        "description": "$pool_size_desc"
+      }
+    },
+    {
+      "name": "data_retention",
+      "type": "string",
+      "default": "7d",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$data_retention_label",
+        "description": "$data_retention_desc"
+      }
+    },
+    {
+      "name": "gc_interval",
+      "type": "string",
+      "default": "1h",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$gc_interval_label",
+        "description": "$gc_interval_desc"
+      }
+    },
+    {
+      "name": "reader_batch_size",
+      "type": "int",
+      "default": 5,
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$reader_batch_size_label",
+        "description": "$reader_batch_size_desc"
+      }
+    },
+    {
+      "name": "write_timeout",
+      "type": "string",
+      "default": "5s",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$write_timeout_label",
+        "description": "$write_timeout_desc"
+      }
+    },
+    {
+      "name": "read_timeout",
+      "type": "string",
+      "default": "5s",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": false,
+        "label": "$read_timeout_label",
+        "description": "$read_timeout_desc"
+      }
+    }
+  ]
+}
