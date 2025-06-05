@@ -30,7 +30,18 @@ ECQ is similar to retained messages. Below features are the main differences:
 - Mock consumer to subscribe ECQ topic: `./scripts/sub 1`
 - Mock producer to publish messages to ECQ topic: `./scripts/pub`
 
+## Logical Queue
+
+The individual exclusive queue is logically a part of a global queue namespaced by owner ID.
+
+This implementation is based on Mnesia, so all the writes are serialized by `mnesia_tm`.
+
+![Logical Queue](logical-queue.png)
+
 ## Data Storage
+
+![Tables](tables.png)
+
 
 Internally, data is stored in below mnesia (rocksdb) tables:
 
@@ -41,6 +52,8 @@ Internally, data is stored in below mnesia (rocksdb) tables:
 
 The tables reside only in 'core' nodes in the cluster.
 The 'replicant' nodes perform PRC calls for writes and reads.
+
+
 
 ### Compaction
 
@@ -73,3 +86,24 @@ For example, in `acl.conf`:
 ```
 {allow, {clientid, {re, "^ecq-.+"}}, subscribe, ["eq $ECQ/${clientid}/#"]}.
 ```
+
+## Performance
+
+AWS c8g.2xlarge instances. 3 core nodes
+
+- Writes
+  - 2000 writes/s for 1KB payload at the cost of 40% CPU.
+  - 8000 writes/s for 256B payload at the cost of 80% CPU.
+- Reads
+  - 3000 reads/s for 1KB payload.
+
+The limiting factor is index and payload writes for producers and commit record writes for consumers.
+
+## Conclusion
+
+This plugin is designed for use cases with moderate throughput requirements:
+- Suitable for: Low to medium write rates (up to 2,000 writes/s for 1KB payloads) and read rates (up to 3,000 reads/s)
+- Best for: Scenarios requiring exclusive consumption with message compaction
+- Not suitable for: High-throughput scenarios requiring shared consumption or extremely high write/read rates
+
+For higher throughput requirements, EMQX will offer a general purpose compacted queue with better scalability. The upcoming solution will be based on raft-based replication for high availability and partitioning for improved scalability.
