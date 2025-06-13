@@ -57,10 +57,7 @@ cleanup
 docker network create "$NET"
 
 case "$IMAGE" in
-    emqx/emqx-enterprise:5.8*)
-        LICENSE_KEY="default"
-        ;;
-    emqx/emqx-enterprise:5.9*)
+    emqx/emqx-enterprise:5.10*)
         LICENSE_KEY="evaluation"
         ;;
     *)
