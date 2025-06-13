@@ -13,17 +13,11 @@
 -define(SCAN_LIMIT, 9).
 -define(SCAN_DELAY, 1).
 
-all() ->
-    [
-        F
-     || {F, _} <- ?MODULE:module_info(exports),
-        is_test_function(F)
-    ].
-is_test_function(F) ->
-    case atom_to_list(F) of
-        "t_" ++ _ -> true;
-        _ -> false
-    end.
+%%--------------------------------------------------------------------
+%% CT boilerplate
+%%--------------------------------------------------------------------
+
+all() -> emqx_ecq_test_helpers:all(?MODULE).
 
 init_per_suite(Config) ->
     Config.
@@ -43,6 +37,10 @@ init_per_testcase(_Case, Config) ->
 end_per_testcase(_Case, _Config) ->
     meck:unload(emqx_ecq_config),
     ok.
+
+%%--------------------------------------------------------------------
+%% Test cases
+%%--------------------------------------------------------------------
 
 t_continue_gc(_Config) ->
     Tester = self(),
@@ -71,6 +69,10 @@ t_continue_gc(_Config) ->
         ok = gen_server:stop(emqx_ecq_gc),
         meck:unload(emqx_ecq_store)
     end.
+
+%%--------------------------------------------------------------------
+%% Helper functions
+%%--------------------------------------------------------------------
 
 infinite_gc_loop_fn(Tester) ->
     gc_loop_fn(Tester, 100000000).

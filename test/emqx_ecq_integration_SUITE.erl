@@ -9,18 +9,11 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
-all() ->
-    [
-        F
-     || {F, _} <- ?MODULE:module_info(exports),
-        is_test_function(F)
-    ].
+%%--------------------------------------------------------------------
+%% CT boilerplate
+%%--------------------------------------------------------------------
 
-is_test_function(F) ->
-    case atom_to_list(F) of
-        "t_" ++ _ -> true;
-        _ -> false
-    end.
+all() -> emqx_ecq_test_helpers:all(?MODULE).
 
 init_per_suite(Config) ->
     Config.
@@ -33,6 +26,10 @@ init_per_testcase(_Case, Config) ->
 
 end_per_testcase(_Case, _Config) ->
     ok.
+
+%%--------------------------------------------------------------------
+%% Test cases
+%%--------------------------------------------------------------------
 
 %% Consumer connect and subscribe, message is published while the consumer is online.
 t_realtime_dispatch(_Config) ->
@@ -110,6 +107,10 @@ t_compaction(_Config) ->
     %% TODO: publish the same key multiple times
     %% expect to consume the latest value
     ok.
+
+%%--------------------------------------------------------------------
+%% Helper functions
+%%--------------------------------------------------------------------
 
 assert_payload_received(SubPid, Key, Data) ->
     receive

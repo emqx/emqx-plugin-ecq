@@ -25,7 +25,7 @@ format_config(["origin" | MaybeJSON]) ->
     Config = emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN),
     case MaybeJSON of
         ["--json" | _] ->
-            [emqx_utils_json:encode(Config), "\n"];
+            [json:encode(Config), "\n"];
         _ ->
             hocon_pp:do(Config, #{})
     end;
@@ -33,7 +33,7 @@ format_config(["inuse" | MaybeJSON]) ->
     Config = emqx_ecq_config:get(),
     case MaybeJSON of
         ["--json" | _] ->
-            [emqx_utils_json:encode(Config), "\n"];
+            [json:encode(Config), "\n"];
         _ ->
             io_lib:format("~p~n", [Config])
     end;
@@ -50,10 +50,10 @@ usages() ->
     ].
 
 show_status() ->
-    emqx_ctl:print("~s~n", [emqx_utils_json:encode(get_status())]).
+    emqx_ctl:print("~s~n", [json:encode(get_status())]).
 
 inspect(ClientID) ->
-    emqx_ctl:print("~s~n", [emqx_utils_json:encode(emqx_ecq_store:inspect(bin(ClientID)))]).
+    emqx_ctl:print("~s~n", [json:encode(emqx_ecq_store:inspect(bin(ClientID)))]).
 
 bin(IoList) ->
     iolist_to_binary(IoList).

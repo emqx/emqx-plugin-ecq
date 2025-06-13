@@ -84,9 +84,7 @@ build_rpc_candidates(core) ->
     local;
 build_rpc_candidates(_) ->
     Nodes = lists:sort(mria_membership:running_core_nodelist()),
-    Count = length(Nodes),
-    Ids = lists:seq(1, Count),
-    maps:from_list(lists:zip(Ids, Nodes)).
+    maps:from_list(lists:enumerate(Nodes)).
 
 %% @doc Pick a core node for the given client ID.
 pick_core_node(ClientId) ->
@@ -96,7 +94,7 @@ pick_core_node(ClientId) ->
         Nodes ->
             case maps:size(Nodes) > 0 of
                 true ->
-                    Key = erlang:phash2(ClientId) rem maps:size(Nodes) + 1,
+                    Key = erlang:phash2(ClientId, maps:size(Nodes)) + 1,
                     {ok, maps:get(Key, Nodes)};
                 false ->
                     {error, no_running_core_nodes}
