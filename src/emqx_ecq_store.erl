@@ -6,8 +6,8 @@
 
 %% Bootstrapping
 -export([
-    create_tables/0,
-    wait_for_tables/0
+    ds_db_settings/0,
+    open_ds_db/0
 ]).
 
 %% Runtime
@@ -20,43 +20,35 @@
 -export_type([msg/0]).
 
 -include("emqx_ecq.hrl").
--define(EOT, '$end_of_table').
 
 -type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary()}.
 
-%% @doc Create the tables.
-create_tables() ->
-    ok = mria:create_table(?SEQNO_TAB, [
-        {type, set},
-        {rlog_shard, ?DB_SHARD},
-        {storage, disc_copies},
-        {record_name, ?SEQNO_REC},
-        {attributes, record_info(fields, ?SEQNO_REC)}
-    ]),
-    ok = mria:create_table(?STATE_TAB, [
-        {type, ordered_set},
-        {rlog_shard, ?DB_SHARD},
-        {storage, rocksdb_copies},
-        {record_name, ?STATE_REC},
-        {attributes, record_info(fields, ?STATE_REC)}
-    ]),
-    ok = mria:create_table(?INDEX_TAB, [
-        {type, ordered_set},
-        {rlog_shard, ?DB_SHARD},
-        {storage, rocksdb_copies},
-        {record_name, ?INDEX_REC},
-        {attributes, record_info(fields, ?INDEX_REC)}
-    ]),
-    ok = mria:create_table(?PAYLOAD_TAB, [
-        {type, ordered_set},
-        {rlog_shard, ?DB_SHARD},
-        {storage, rocksdb_copies},
-        {record_name, ?PAYLOAD_REC},
-        {attributes, record_info(fields, ?PAYLOAD_REC)}
-    ]).
+-define(DS_DB_SETTINGS, #{
+    transaction =>
+        #{
+            flush_interval => 5000,
+            idle_flush_interval => 1,
+            conflict_window => 5000
+        },
+    storage =>
+        {emqx_ds_storage_skipstream_lts_v2, #{}},
+    store_ttv => true,
+    backend => builtin_raft,
+    n_shards => 16,
+    replication_options => #{},
+    n_sites => 3,
+    replication_factor => 2
+}).
 
-wait_for_tables() ->
-    ok = mria:wait_for_tables([?SEQNO_TAB, ?INDEX_TAB, ?PAYLOAD_TAB, ?STATE_TAB]).
+open_ds_db() ->
+    Result = emqx_ds:open_db(?DS_DB, ds_db_settings()),
+    ?LOG(info, open_ds_db, #{
+        result => Result
+    }),
+    Result.
+
+ds_db_settings() ->
+    ?DS_DB_SETTINGS.
 
 %% @doc Append a new message to a queue.
 %% 1. Allocate a new sequence number.

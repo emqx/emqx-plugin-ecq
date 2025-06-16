@@ -56,6 +56,9 @@
 }).
 
 -define(DB_SHARD, ecq_shard).
+
+-define(DS_DB, ecq).
+
 -define(WRITER_POOL, emqx_ecq_writer).
 -define(READER_REG_POOL, emqx_ecq_reader_reg).
 

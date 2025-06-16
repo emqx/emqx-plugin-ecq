@@ -15,7 +15,7 @@
 start_link(MyRole) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [MyRole]).
 
-init([MyRole]) ->
+init([_MyRole]) ->
     ok = emqx_ecq_inflight:create_tables(),
     ok = emqx_ecq_reader_reg:create_tables(),
     SupFlags = #{
@@ -41,19 +41,12 @@ init([MyRole]) ->
     },
     WriterPoolSupSpec = writer_pool_sup_spec(),
     ReaderRegPoolSupSpec = reader_reg_table_sup_spec(),
-    CommonChildren = [
+    Children = [
         ConfigChildSpec,
         ClusterWatchChildSpec,
-        ReaderRegPoolSupSpec
+        ReaderRegPoolSupSpec,
+        WriterPoolSupSpec
     ],
-    Children =
-        case MyRole of
-            core ->
-                %% Start writer pool and gc process on core nodes
-                CommonChildren ++ [WriterPoolSupSpec];
-            _ ->
-                CommonChildren
-        end,
     {ok, {SupFlags, Children}}.
 
 resolve_pool_size() ->
