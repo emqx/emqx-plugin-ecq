@@ -39,14 +39,6 @@ init([MyRole]) ->
         type => worker,
         modules => [emqx_ecq_writer_dist]
     },
-    GcChildSpec = #{
-        id => emqx_ecq_gc,
-        start => {emqx_ecq_gc, start_link, []},
-        restart => permanent,
-        shutdown => 5000,
-        type => worker,
-        modules => [emqx_ecq_gc]
-    },
     WriterPoolSupSpec = writer_pool_sup_spec(),
     ReaderRegPoolSupSpec = reader_reg_table_sup_spec(),
     CommonChildren = [
@@ -58,7 +50,7 @@ init([MyRole]) ->
         case MyRole of
             core ->
                 %% Start writer pool and gc process on core nodes
-                CommonChildren ++ [WriterPoolSupSpec, GcChildSpec];
+                CommonChildren ++ [WriterPoolSupSpec];
             _ ->
                 CommonChildren
         end,

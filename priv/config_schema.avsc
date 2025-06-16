@@ -27,18 +27,6 @@
       }
     },
     {
-      "name": "gc_interval",
-      "type": "string",
-      "default": "1h",
-      "$ui": {
-        "component": "input",
-        "flex": 12,
-        "required": false,
-        "label": "$gc_interval_label",
-        "description": "$gc_interval_desc"
-      }
-    },
-    {
       "name": "reader_batch_size",
       "type": "int",
       "default": 5,

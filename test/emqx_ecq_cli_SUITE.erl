@@ -30,70 +30,6 @@ end_per_testcase(_Case, _Config) ->
 %% Test cases
 %%--------------------------------------------------------------------
 
-t_gc_after_config_change(Config) ->
-    {ok, PubPid} = start_publisher(),
-    try
-        ok = publish_batch(PubPid, 10),
-        Status1 = get_status(),
-        StatusRepl = get_status(3),
-        ?assertMatch(#{<<"first">> := _}, maps:get(<<"messages">>, Status1)),
-        %% data is not replicated to replicant nodes
-        ?assertEqual(<<"empty">>, maps:get(<<"messages">>, StatusRepl)),
-        PluginConfig = new_config(),
-        timer:sleep(1000),
-        ok = update_plugin_config(PluginConfig, Config),
-        %% ensure ids and data are expired
-        %% see new_config/0 for gc_interval and data_retention
-        timer:sleep(1000),
-        Status2 = get_status(),
-        ?assertEqual(<<"empty">>, maps:get(<<"messages">>, Status2))
-    after
-        ok = stop_client(PubPid)
-    end.
-
-t_inspect(_Config) ->
-    N = 10,
-    {ok, PubPid} = start_publisher(),
-    UniqueID = random_clientid("sub-"),
-    Inspect1 = inspect(UniqueID),
-    ?assertMatch(
-        #{
-            <<"queue">> := <<"empty">>,
-            <<"acked">> := <<"none">>,
-            <<"last_ack_ts">> := <<"none">>
-        },
-        Inspect1
-    ),
-    try
-        ok = publish_batch(PubPid, N, UniqueID),
-        Inspect2 = inspect(UniqueID),
-        ?assertMatch(
-            #{
-                <<"queue">> := <<"[1,...,10]">>,
-                <<"acked">> := <<"none">>,
-                <<"last_ack_ts">> := <<"none">>
-            },
-            Inspect2
-        ),
-        {ok, SubPid} = start_subscriber(UniqueID),
-        try
-            _ = collect_messages(SubPid, N),
-            Inspect3 = inspect(UniqueID),
-            ?assertMatch(
-                #{
-                    <<"queue">> := <<"[1,...,10]">>,
-                    <<"acked">> := 10,
-                    <<"last_ack_ts">> := _
-                },
-                Inspect3
-            )
-        after
-            ok = stop_client(SubPid)
-        end
-    after
-        ok = stop_client(PubPid)
-    end.
-
 %%--------------------------------------------------------------------
 %% Helper functions
 %%--------------------------------------------------------------------
@@ -151,7 +87,6 @@ login() ->
 default_config() ->
     #{
         writer_pool_size => 0,
-        gc_interval => <<"1h">>,
         data_retention => <<"7d">>,
         reader_batch_size => 5,
         write_timeout => <<"5s">>,
@@ -160,7 +95,6 @@ default_config() ->
 
 new_config() ->
     maps:merge(default_config(), #{
-        gc_interval => <<"1s">>,
         data_retention => <<"1s">>
     }).
 

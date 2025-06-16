@@ -13,8 +13,6 @@ parse_test_() ->
         ?_assertEqual(#{data_retention => 10000}, parse(#{<<"data_retention">> => <<"10000ms">>})),
         ?_assertEqual(#{data_retention => 10000}, parse(#{<<"data_retention">> => 9999.9})),
         ?_assertEqual(#{data_retention => 10000}, parse(#{<<"data_retention">> => 9999.1})),
-        ?_assertEqual(#{gc_interval => 3600000}, parse(#{<<"gc_interval">> => <<"1h">>})),
-        ?_assertEqual(#{gc_interval => 3600000}, parse(#{<<"gc_interval">> => 3600000})),
         ?_assertEqual(#{reader_batch_size => 16}, parse(#{<<"reader_batch_size">> => 16})),
         ?_assertThrow(
             "reader_batch_size_must_be_less_than_32", parse(#{<<"reader_batch_size">> => 33})
