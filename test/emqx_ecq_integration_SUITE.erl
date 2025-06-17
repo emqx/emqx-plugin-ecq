@@ -104,9 +104,26 @@ t_disconnected_session_does_not_queue_messages(_Config) ->
     ok.
 
 t_compaction(_Config) ->
-    %% TODO: publish the same key multiple times
-    %% expect to consume the latest value
-    ok.
+    {ok, PubPid} = start_publisher(),
+    SubClientID = random_clientid("sub-"),
+    Key = <<"key/1">>,
+    try
+        lists:foreach(
+            fun(_) ->
+                {ok, _Data} = publish_data(PubPid, SubClientID, Key)
+            end,
+            lists:seq(1, 100)
+        ),
+        {ok, Data} = publish_data(PubPid, SubClientID, Key),
+        {ok, SubPid} = start_subscriber(SubClientID),
+        try
+            ok = assert_payload_received(SubPid, Key, Data)
+        after
+            ok = stop_client(SubPid)
+        end
+    after
+        ok = stop_client(PubPid)
+    end.
 
 %%--------------------------------------------------------------------
 %% Helper functions
@@ -176,7 +193,12 @@ words(Topic) ->
     binary:split(Topic, <<"/">>, [global]).
 
 random_clientid(Prefix) ->
-    list_to_binary([Prefix, integer_to_list(erlang:system_time(millisecond))]).
+    list_to_binary([
+        Prefix,
+        integer_to_list(erlang:system_time(nanosecond)),
+        "-",
+        integer_to_list(rand:uniform(1000000))
+    ]).
 
 bin(IoData) ->
     iolist_to_binary(IoData).

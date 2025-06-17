@@ -6,7 +6,6 @@
 
 %% Bootstrapping
 -export([
-    db_settings/1,
     open_db/0
 ]).
 
@@ -58,42 +57,22 @@
 
 %% Types
 
+-type iterator() :: term().
+
 -type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary()}.
 
--type read_state() :: #{it := non_neg_integer(), clientid := binary()}.
+-type read_state() :: #{it := iterator() | undefined, clientid := binary()}.
 
+%%--------------------------------------------------------------------
+%% API
+%%--------------------------------------------------------------------
+
+-spec open_db() -> ok | {error, term()}.
 open_db() ->
     maybe
         ok ?= open_db(?DB_PAYLOAD, db_settings(?DB_PAYLOAD_LTS_SETTINGS)),
         ok = open_db(?DB_READ_STATE, db_settings(?DB_READ_STATE_LTS_SETTINGS))
     end.
-
-open_db(DB, Settings) ->
-    Result = emqx_ds:open_db(DB, Settings),
-    ?LOG(info, open_ds_db, #{
-        db => DB,
-        settings => Settings,
-        result => Result
-    }),
-    Result.
-
-db_settings(LtsSettings) ->
-    #{
-        transaction =>
-            #{
-                flush_interval => 5000,
-                idle_flush_interval => 1,
-                conflict_window => 5000
-            },
-        storage =>
-            {emqx_ds_storage_skipstream_lts_v2, LtsSettings},
-        store_ttv => true,
-        backend => builtin_raft,
-        n_shards => 16,
-        replication_options => #{},
-        n_sites => 3,
-        replication_factor => 2
-    }.
 
 -spec append(ClientID :: binary(), _MsgKeyMsgKey :: binary(), _Payload :: binary(), _Ts :: ts()) ->
     ok | {error, term()}.
@@ -110,7 +89,7 @@ append(ClientID, MsgKey, Payload, Ts) ->
     PayloadBin = pack_msg(Payload, Ts),
     TxFun = fun() ->
         emqx_ds:tx_del_topic(PayloadTopic),
-        emqx_ds:tx_write(PayloadTopic, ?ds_tx_ts_monotonic, PayloadBin)
+        emqx_ds:tx_write({PayloadTopic, ?ds_tx_ts_monotonic, PayloadBin})
     end,
     case emqx_ds:trans(TxOpts, TxFun) of
         {atomic, _Serial, ok} ->
@@ -129,6 +108,10 @@ ack_and_fetch_next_batch(ReadState, Limit) ->
         {ok, Batch, ReadState}
     end.
 
+%%--------------------------------------------------------------------
+%% Internal functions
+%%--------------------------------------------------------------------
+
 fetch_batch(ReadState, Limit) ->
     case get_iterator(ReadState) of
         {error, _} = Error ->
@@ -136,7 +119,7 @@ fetch_batch(ReadState, Limit) ->
         {ok, undefined} ->
             {ok, [], ReadState};
         {ok, It0} ->
-            case emqx_ds:next(It0, Limit) of
+            case emqx_ds:next(?DB_PAYLOAD, It0, Limit) of
                 {ok, It, Values} ->
                     Msgs = lists:map(fun unpack_msg/1, Values),
                     {ok, Msgs, ReadState#{it => It}};
@@ -149,12 +132,12 @@ fetch_batch(ReadState, Limit) ->
             end
     end.
 
-get_iterator(#{clientid := ClientID, it := undefined}) ->
+get_iterator(#{clientid := ClientID, it := undefined} = _ReadState) ->
     Filter = ?MSG_KEY_TOPIC(ClientID, '#'),
-    Shard = emqx_gs:shard_of(ClientID),
+    Shard = emqx_ds:shard_of(?DB_PAYLOAD, ClientID),
     maybe
-        {[{_Slab, Stream}], []} ?= emqx_gs:get_streams(?DB_PAYLOAD, Filter, 0, #{shard => Shard}),
-        {ok, It} ?= emqx_gs:make_iterator(?DB_PAYLOAD, Stream, Filter, 0),
+        {[{_Slab, Stream}], []} ?= emqx_ds:get_streams(?DB_PAYLOAD, Filter, 0, #{shard => Shard}),
+        {ok, It} ?= emqx_ds:make_iterator(?DB_PAYLOAD, Stream, Filter, 0),
         {ok, It}
     else
         {[], []} ->
@@ -175,6 +158,7 @@ init_read_state(ClientID) ->
     TxOpts = #{
         db => ?DB_READ_STATE,
         shard => {auto, ClientID},
+        generation => 1,
         sync => true,
         retries => ?READ_STATE_INIT_TX_RETRIES
     },
@@ -182,7 +166,7 @@ init_read_state(ClientID) ->
         emqx_ds:tx_read(?READ_STATE_TOPIC(ClientID))
     end,
     case emqx_ds:trans(TxOpts, TxFun) of
-        [{atomic, _Serial, Values}] ->
+        {atomic, _Serial, Values} ->
             case Values of
                 [{_Topic, 0, Bin}] ->
                     {ok, unpack_read_state(ClientID, Bin)};
@@ -193,10 +177,38 @@ init_read_state(ClientID) ->
             {error, {IsRecoverable, Reason}}
     end.
 
+db_settings(LtsSettings) ->
+    #{
+        transaction =>
+            #{
+                flush_interval => 5000,
+                idle_flush_interval => 1,
+                conflict_window => 5000
+            },
+        storage =>
+            {emqx_ds_storage_skipstream_lts_v2, LtsSettings},
+        store_ttv => true,
+        backend => builtin_raft,
+        n_shards => 16,
+        replication_options => #{},
+        n_sites => 3,
+        replication_factor => 2
+    }.
+
+open_db(DB, Settings) ->
+    Result = emqx_ds:open_db(DB, Settings),
+    ?LOG(info, open_ds_db, #{
+        db => DB,
+        settings => Settings,
+        result => Result
+    }),
+    Result.
+
 persist_read_state(#{clientid := ClientID} = ReadState) ->
     TxOpts = #{
         db => ?DB_READ_STATE,
         shard => {auto, ClientID},
+        generation => 1,
         sync => true,
         retries => ?READ_STATE_UPDATE_TX_RETRIES
     },
@@ -225,9 +237,9 @@ pack_msg(Payload, Ts) ->
         ?msg_payload => Payload
     }).
 
-unpack_msg({?MSG_KEY_TOPIC(_ClientID, MsgKey), Seqno, Payload}) ->
+unpack_msg({_DSKey, {?MSG_KEY_TOPIC(_ClientID, MsgKey), Seqno, Payload}}) ->
     %% NOTE
-    %% By far we do not need Ts
+    %% By far we do not need Ts that came from the message
     #{
         ?msg_schema_version := ?SCHEMA_VERSION,
         ?msg_payload := Value
