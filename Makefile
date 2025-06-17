@@ -23,7 +23,7 @@ compile: $(REBAR)
 
 .PHONY: ct
 ct: $(REBAR)
-	$(REBAR) as test ct -v
+	$(REBAR) as test ct -v --readable=true
 
 .PHONY: eunit
 eunit: $(REBAR)

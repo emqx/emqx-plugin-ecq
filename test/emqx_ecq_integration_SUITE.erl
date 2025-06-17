@@ -35,66 +35,51 @@ end_per_testcase(_Case, _Config) ->
 t_realtime_dispatch(_Config) ->
     SubClientID = random_clientid("sub-"),
     {ok, SubPid} = start_subscriber(SubClientID),
-    try
-        {ok, PubPid} = start_publisher(),
-        try
-            Key = <<"key/1">>,
-            {ok, DataToExpect} = publish_data(PubPid, SubClientID, Key),
-            ok = assert_payload_received(SubPid, Key, DataToExpect)
-        after
-            ok = stop_client(PubPid)
-        end
-    after
-        ok = stop_client(SubPid)
-    end.
+    {ok, PubPid} = start_publisher(),
+    Key = <<"key/1">>,
+    {ok, DataToExpect} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_payload_received(SubPid, Key, DataToExpect),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
 %% A message is published by publisher, then a subscriber connects and subscribes.
 t_late_subscribe(_Config) ->
     SubClientID = random_clientid("sub-"),
     Key = <<"key/1">>,
     {ok, PubPid} = start_publisher(),
-    try
-        {ok, Data} = publish_data(PubPid, SubClientID, Key),
-        {ok, SubPid} = start_subscriber(SubClientID),
-        try
-            ok = assert_payload_received(SubPid, Key, Data)
-        after
-            ok = stop_client(SubPid)
-        end
-    after
-        ok = stop_client(PubPid)
-    end.
+    {ok, Data} = publish_data(PubPid, SubClientID, Key),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    ok = assert_payload_received(SubPid, Key, Data),
+    ok = stop_client(SubPid),
+    ok = stop_client(PubPid).
 
 t_direct_publish_to_ecq_topic_is_not_allowed(_Config) ->
     {ok, PubPid} = start_publisher(),
     SubClientID = random_clientid("sub-"),
     {ok, SubPid} = start_subscriber(SubClientID),
     Key = <<"key/1">>,
-    try
-        %% This publish should not be sent to the subscriber (terminated by the plugin).
-        {ok, _} = emqtt:publish(PubPid, bin(["$ECQ/", SubClientID, "/", Key]), <<"data1">>, 1),
-        %% This publish should be sent to the subscriber.
-        {ok, _} = emqtt:publish(PubPid, bin(["normal/", SubClientID, "/", Key]), <<"data2">>, 1),
-        receive
-            {publish_received, SubPid, SubClientID, Msg} ->
-                ?assertMatch(#{qos := 1}, Msg),
-                ?assertEqual(<<"data2">>, maps:get(payload, Msg)),
-                Topic = maps:get(topic, Msg),
-                ExpectedTopic = bin(["normal/", SubClientID, "/", Key]),
-                ?assertEqual(ExpectedTopic, Topic)
-        after 10000 ->
-            ct:fail(#{reason => timeout})
-        end,
-        receive
-            {publish_received, SubPid, SubClientID, _Msg} ->
-                ct:fail(#{reason => "should not reach here"})
-        after 500 ->
-            ok
-        end
-    after
-        ok = stop_client(PubPid),
-        ok = stop_client(SubPid)
-    end.
+    %% This publish should not be sent to the subscriber (terminated by the plugin).
+    {ok, _} = emqtt:publish(PubPid, bin(["$ECQ/", SubClientID, "/", Key]), <<"data1">>, 1),
+    %% This publish should be sent to the subscriber.
+    {ok, _} = emqtt:publish(PubPid, bin(["normal/", SubClientID, "/", Key]), <<"data2">>, 1),
+    receive
+        {publish_received, SubPid, SubClientID, Msg} ->
+            ?assertMatch(#{qos := 1}, Msg),
+            ?assertEqual(<<"data2">>, maps:get(payload, Msg)),
+            Topic = maps:get(topic, Msg),
+            ExpectedTopic = bin(["normal/", SubClientID, "/", Key]),
+            ?assertEqual(ExpectedTopic, Topic)
+    after 10000 ->
+        ct:fail(#{reason => timeout})
+    end,
+    receive
+        {publish_received, SubPid, SubClientID, _Msg} ->
+            ct:fail(#{reason => "should not reach here"})
+    after 500 ->
+        ok
+    end,
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
 %% A subscriber disconnects, then reconnects with session persisted.
 %% It will not queue the message in its session state while it is offline.
@@ -107,23 +92,17 @@ t_compaction(_Config) ->
     {ok, PubPid} = start_publisher(),
     SubClientID = random_clientid("sub-"),
     Key = <<"key/1">>,
-    try
-        lists:foreach(
-            fun(_) ->
-                {ok, _Data} = publish_data(PubPid, SubClientID, Key)
-            end,
-            lists:seq(1, 100)
-        ),
-        {ok, Data} = publish_data(PubPid, SubClientID, Key),
-        {ok, SubPid} = start_subscriber(SubClientID),
-        try
-            ok = assert_payload_received(SubPid, Key, Data)
-        after
-            ok = stop_client(SubPid)
-        end
-    after
-        ok = stop_client(PubPid)
-    end.
+    lists:foreach(
+        fun(_) ->
+            {ok, _Data} = publish_data(PubPid, SubClientID, Key)
+        end,
+        lists:seq(1, 100)
+    ),
+    {ok, Data} = publish_data(PubPid, SubClientID, Key),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    ok = assert_payload_received(SubPid, Key, Data),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
 %%--------------------------------------------------------------------
 %% Helper functions
