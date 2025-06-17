@@ -104,6 +104,22 @@ t_compaction(_Config) ->
     ok = stop_client(PubPid),
     ok = stop_client(SubPid).
 
+%% Reconnected client should not receive already received messages, should receive only new messages.
+t_connection_restoration(_Config) ->
+    SubClientID = random_clientid("sub-"),
+    {ok, SubPid0} = start_subscriber(SubClientID),
+    Key = <<"key/1">>,
+    {ok, PubPid} = start_publisher(),
+    {ok, Data0} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_payload_received(SubPid0, Key, Data0),
+    ok = stop_client(SubPid0),
+    {ok, SubPid1} = start_subscriber(SubClientID),
+    ok = assert_not_received(SubPid1, SubClientID, Key),
+    {ok, Data1} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_payload_received(SubPid1, Key, Data1),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid1).
+
 %%--------------------------------------------------------------------
 %% Helper functions
 %%--------------------------------------------------------------------
@@ -119,6 +135,21 @@ assert_payload_received(SubPid, Key, Data) ->
             ok
     after 10000 ->
         ct:fail(#{reason => timeout})
+    end.
+
+assert_not_received(SubPid, SubClientID, Key) ->
+    Topic = bin(["$ECQ/", SubClientID, "/", Key]),
+    receive
+        {publish_received, SubPid, SubClientID, #{topic := Topic} = Msg} ->
+            ct:fail(#{
+                reason => "should not receive message under key",
+                topic => Topic,
+                msg => Msg,
+                key => Key,
+                sub_clientid => SubClientID
+            })
+    after 500 ->
+        ok
     end.
 
 start_publisher() ->
