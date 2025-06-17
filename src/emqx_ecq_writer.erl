@@ -102,6 +102,7 @@ handle_append(
 ) ->
     maybe
         ok ?= emqx_ecq_store:append(ClientID, MsgKey, Payload, Ts),
+        ?LOG(debug, "succeeded_to_append_message", #{subscriber => ClientID, msg_key => MsgKey}),
         ok = maybe_notify_reader(ClientID)
     end.
 

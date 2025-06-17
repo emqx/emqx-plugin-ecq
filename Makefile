@@ -63,7 +63,7 @@ fmt-check: $(REBAR)
 
 .PHONY: run
 run: rel
-	./scripts/run.sh emqx/emqx-enterprise:5.10.0-g9aa1383d
+	./scripts/run.sh emqx/emqx-enterprise:5.10.0-gf1c14e70
 
 .PHONY: run-cleanup
 run-cleanup:

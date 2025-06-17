@@ -137,10 +137,12 @@ get_iterator(#{clientid := ClientID, it := undefined} = _ReadState) ->
     Shard = emqx_ds:shard_of(?DB_PAYLOAD, ClientID),
     maybe
         {[{_Slab, Stream}], []} ?= emqx_ds:get_streams(?DB_PAYLOAD, Filter, 0, #{shard => Shard}),
+        ?LOG(debug, "found_stream", #{stream => Stream, shard => Shard}),
         {ok, It} ?= emqx_ds:make_iterator(?DB_PAYLOAD, Stream, Filter, 0),
         {ok, It}
     else
         {[], []} ->
+            ?LOG(debug, "no_streams_found", #{}),
             {ok, undefined};
         {MultipleStreams, []} when is_list(MultipleStreams) ->
             ?LOG(error, "multiple_streams", #{multiple_streams => MultipleStreams, shard => Shard}),

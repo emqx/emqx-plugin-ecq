@@ -32,6 +32,8 @@ end_per_testcase(_Case, _Config) ->
 
 %% TODO
 %% Add some test cases
+t_ok(_Config) ->
+    ok.
 
 %%--------------------------------------------------------------------
 %% Helper functions

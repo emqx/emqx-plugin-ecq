@@ -97,7 +97,7 @@ on_message_publish(
     {stop, do_not_allow_publish(Message)};
 on_message_publish(#message{topic = <<?ECQ_TOPIC_PREFIX, $/, Rest/binary>>} = Message) ->
     %% Do not allow publishing directly to ECQ topics.
-    ?LOG(error, "not_allowed_to_publish_to_ecq_topic", #{
+    ?LOG(warning, "not_allowed_to_publish_to_ecq_topic", #{
         topic => Message#message.topic,
         explain => "Mabye publish to $ECQ/w/" ++ binary_to_list(Rest) ++ " instead?"
     }),

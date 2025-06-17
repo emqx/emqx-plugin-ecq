@@ -48,7 +48,7 @@ ensure_reader(ClientID) ->
     case get_reader_pd() of
         undefined ->
             {ok, ReaderPid} = start_link(ClientID, self()),
-            ok = new_reader_pd(ReaderPid),
+            ok = new_reader_pd(ClientID, ReaderPid),
             ok = emqx_ecq_reader_reg:add(self(), ReaderPid),
             ?LOG(debug, "reader_registered", #{reader => ReaderPid}),
             ReaderPid;
@@ -81,12 +81,13 @@ heartbeat() ->
         undefined ->
             %% not a ECQ consumer
             ok;
-        #{last_ack_ts := LastTs} ->
+        #{last_ack_ts := LastTs, clientid := ClientID} ->
+            ?LOG(debug, "heartbeat_maybe_trigger", #{clientid => ClientID}),
             SubPid = self(),
-            heartbeat2(SubPid, LastTs)
+            heartbeat2(SubPid, LastTs, ClientID)
     end.
 
-heartbeat2(SubPid, LastTs) ->
+heartbeat2(SubPid, LastTs, ClientID) ->
     HbTs = get(?LAST_HEARTBEAT_TS),
     MaxTs =
         case HbTs of
@@ -97,18 +98,19 @@ heartbeat2(SubPid, LastTs) ->
         end,
     case now_ts() - MaxTs > ?HEARTBEAT_POLL_INTERVAL of
         true ->
-            heartbeat3(SubPid);
+            heartbeat3(SubPid, ClientID);
         false ->
             ok
     end.
 
-heartbeat3(SubPid) ->
+heartbeat3(SubPid, ClientID) ->
     case emqx_ecq_inflight:exists(SubPid) of
         true ->
             %% There are inflight messages, wait for ack to trigger the next poll.
             ok;
         false ->
             put(?LAST_HEARTBEAT_TS, now_ts()),
+            ?LOG(debug, "heartbeat_triggered", #{clientid => ClientID}),
             notify_poll()
     end.
 
@@ -127,7 +129,8 @@ init([ClientID, SubPid]) ->
     }),
     case emqx_ecq_store:init_read_state(ClientID) of
         {ok, ReadState} ->
-            {ok, #{clientid => ClientID, sub_pid => SubPid, read_state => ReadState}};
+            State = #{sub_pid => SubPid, read_state => ReadState, clientid => ClientID},
+            {ok, State};
         {error, Error} ->
             {stop, Error}
     end.
@@ -218,12 +221,18 @@ pub_topic(ClientID, MsgKey) ->
 
 handle_poll(#{clientid := ClientID, sub_pid := SubPid, read_state := ReadState0} = State) ->
     BatchSize = emqx_ecq_config:get_reader_batch_size(),
-    case emqx_ecq_store:ack_and_fetch_next_batch(ReadState0, BatchSize) of
+    {Time, Res} = timer:tc(fun() ->
+        emqx_ecq_store:ack_and_fetch_next_batch(ReadState0, BatchSize)
+    end),
+    case Res of
         {ok, Batch, ReadState} ->
+            ?LOG(debug, "succeeded_to_fetch_next_batch", #{
+                batch_size => length(Batch), time_us => Time
+            }),
             ok = deliver_batch(ClientID, SubPid, Batch),
             State#{read_state := ReadState};
         {error, Reason} ->
-            ?LOG(error, "failed_to_fetch_next_batch", #{reason => Reason}),
+            ?LOG(error, "failed_to_fetch_next_batch", #{reason => Reason, time_us => Time}),
             State
     end.
 
@@ -256,8 +265,8 @@ deliver_to_subscriber(SubPid, ClientID, Msg) ->
 get_reader_pd() ->
     erlang:get(?READER_PD_KEY).
 
-new_reader_pd(ReaderPid) ->
-    PD = #{pid => ReaderPid, seqno => ?NO_ACK, last_ack_ts => now_ts()},
+new_reader_pd(ClientID, ReaderPid) ->
+    PD = #{pid => ReaderPid, seqno => ?NO_ACK, last_ack_ts => now_ts(), clientid => ClientID},
     put(?READER_PD_KEY, PD),
     ok.
 
