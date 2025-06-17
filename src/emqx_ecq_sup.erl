@@ -31,19 +31,10 @@ init([_MyRole]) ->
         type => worker,
         modules => [emqx_ecq]
     },
-    ClusterWatchChildSpec = #{
-        id => emqx_ecq_writer_dist,
-        start => {emqx_ecq_writer_dist, start_link, []},
-        restart => permanent,
-        shutdown => 5000,
-        type => worker,
-        modules => [emqx_ecq_writer_dist]
-    },
     WriterPoolSupSpec = writer_pool_sup_spec(),
     ReaderRegPoolSupSpec = reader_reg_table_sup_spec(),
     Children = [
         ConfigChildSpec,
-        ClusterWatchChildSpec,
         ReaderRegPoolSupSpec,
         WriterPoolSupSpec
     ],

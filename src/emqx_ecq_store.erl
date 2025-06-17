@@ -50,28 +50,42 @@ open_ds_db() ->
 ds_db_settings() ->
     ?DS_DB_SETTINGS.
 
-%% @doc Append a new message to a queue.
-%% 1. Allocate a new sequence number.
-%% 2. Insert the message into the index table.
-%% 3. Insert the message into the payload table.
-%% 4. Initialize the state if not exists.
-%% NOTE: all operations are dirty as intended, transactions are costly.
-%% TODO: add an option for transactional append.
 -spec append(ClientID :: binary(), MsgKey :: binary(), Payload :: binary(), Ts :: ts()) ->
-    {ok, seqno()}.
+    ok | {error, term()}.
 append(ClientID, MsgKey, Payload, Ts) ->
-    %% assign a new sequence number
-    Seqno = mria:dirty_update_counter(?SEQNO_TAB, ClientID, 1),
-    %% Insert index
-    Index = #?INDEX_REC{key = ?INDEX_KEY(ClientID, Seqno), msg_key = MsgKey, ts = Ts},
-    ok = mria:dirty_write(?INDEX_TAB, Index),
-    %% Insert payload
-    PayloadKey = ?PAYLOAD_KEY(ClientID, MsgKey, Seqno, Ts),
-    PayloadRec = #?PAYLOAD_REC{key = PayloadKey, payload = Payload},
-    ok = mria:dirty_write(?PAYLOAD_TAB, PayloadRec),
-    DeletedSeqnos = delete_old_payload(PayloadKey),
-    ok = delete_index(ClientID, DeletedSeqnos),
-    {ok, Seqno}.
+    TxOpts = #{
+        db => ?DS_DB,
+        shard => {auto, ClientID},
+        %% TODO: use several generations for retention
+        generation => 1,
+        sync => true,
+        retries => 1
+    },
+    PayloadTopic = payload_topic(ClientID, MsgKey),
+    PayloadBin = pack_payload(Payload, Ts),
+    TxFun = fun() ->
+        emqx_ds:tx_del_topic(PayloadTopic),
+        emqx_ds:tx_write(PayloadTopic, ?ds_tx_ts_monotonic, PayloadBin)
+    end,
+    case emqx_ds:trans(TxOpts, TxFun) of
+        {Ref, ok} ->
+            {ok, Ref};
+        {error, Recoverable, Reason} ->
+            % TODO: retry
+            {error, {Recoverable, Reason}}
+    end.
+
+payload_topic(ClientID, MsgKey) ->
+    [?payload, ClientID, ?key, MsgKey].
+
+pack_payload(Payload, Ts) ->
+    %% TODO
+    %% pack with ASN.1
+    term_to_binary({Payload, Ts}).
+
+unpack_payload(Payload) ->
+    %% TODO
+    {_Payload, _Ts} = binary_to_term(Payload).
 
 %% @doc Ack and fetch a batch of messages starting from the given seqno.
 -spec ack_and_fetch_next_batch(ClientID :: binary(), no_ack | seqno(), Limit :: non_neg_integer()) ->
