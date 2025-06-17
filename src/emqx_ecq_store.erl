@@ -6,173 +6,247 @@
 
 %% Bootstrapping
 -export([
-    ds_db_settings/0,
-    open_ds_db/0
+    db_settings/1,
+    open_db/0
 ]).
 
 %% Runtime
 -export([
     append/4,
-    ack_and_fetch_next_batch/3,
-    mark_acked/2
+    init_read_state/1,
+    ack_and_fetch_next_batch/2
 ]).
 
 -export_type([msg/0]).
 
 -include("emqx_ecq.hrl").
 
--type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary()}.
+-define(SCHEMA_VERSION, 1).
 
--define(DS_DB_SETTINGS, #{
-    transaction =>
-        #{
-            flush_interval => 5000,
-            idle_flush_interval => 1,
-            conflict_window => 5000
-        },
-    storage =>
-        {emqx_ds_storage_skipstream_lts_v2, #{}},
-    store_ttv => true,
-    backend => builtin_raft,
-    n_shards => 16,
-    replication_options => #{},
-    n_sites => 3,
-    replication_factor => 2
+%% Topics
+
+-define(PAYLOAD_TOPIC_SEGMENT, <<"payload">>).
+-define(KEY_TOPIC_SEGMENT, <<"msg_key">>).
+-define(READ_STATE_TOPIC_SEGMENT, <<"read_state">>).
+-define(MSG_KEY_TOPIC(CLIENT_ID, MSG_KEY), [
+    ?PAYLOAD_TOPIC_SEGMENT, CLIENT_ID, ?KEY_TOPIC_SEGMENT, MSG_KEY
+]).
+-define(READ_STATE_TOPIC(CLIENT_ID), [?READ_STATE_TOPIC_SEGMENT, CLIENT_ID]).
+
+%% Serialization keys
+
+-define(read_state_schema_version, 1).
+-define(read_state_it, 2).
+
+-define(msg_schema_version, 1).
+-define(msg_ts, 2).
+-define(msg_payload, 3).
+
+-define(PAYLOAD_TX_RETRIES, 1).
+-define(READ_STATE_INIT_TX_RETRIES, 5).
+-define(READ_STATE_UPDATE_TX_RETRIES, 1).
+
+-define(DB_PAYLOAD_LTS_SETTINGS, #{
+    %% "payload/CLIENT_ID/msg_key/MSG_KEY"
+    lts_threshold_spec => {simple, {100, 0, 100, 0, 100}}
 }).
 
-open_ds_db() ->
-    Result = emqx_ds:open_db(?DS_DB, ds_db_settings()),
+-define(DB_READ_STATE_LTS_SETTINGS, #{
+    %% "read_state/CLIENT_ID"
+    lts_threshold_spec => {simple, {100, 0, 10}}
+}).
+
+%% Types
+
+-type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary()}.
+
+-type read_state() :: #{it := non_neg_integer(), clientid := binary()}.
+
+open_db() ->
+    maybe
+        ok ?= open_db(?DB_PAYLOAD, db_settings(?DB_PAYLOAD_LTS_SETTINGS)),
+        ok = open_db(?DB_READ_STATE, db_settings(?DB_READ_STATE_LTS_SETTINGS))
+    end.
+
+open_db(DB, Settings) ->
+    Result = emqx_ds:open_db(DB, Settings),
     ?LOG(info, open_ds_db, #{
+        db => DB,
+        settings => Settings,
         result => Result
     }),
     Result.
 
-ds_db_settings() ->
-    ?DS_DB_SETTINGS.
+db_settings(LtsSettings) ->
+    #{
+        transaction =>
+            #{
+                flush_interval => 5000,
+                idle_flush_interval => 1,
+                conflict_window => 5000
+            },
+        storage =>
+            {emqx_ds_storage_skipstream_lts_v2, LtsSettings},
+        store_ttv => true,
+        backend => builtin_raft,
+        n_shards => 16,
+        replication_options => #{},
+        n_sites => 3,
+        replication_factor => 2
+    }.
 
--spec append(ClientID :: binary(), MsgKey :: binary(), Payload :: binary(), Ts :: ts()) ->
+-spec append(ClientID :: binary(), _MsgKeyMsgKey :: binary(), _Payload :: binary(), _Ts :: ts()) ->
     ok | {error, term()}.
 append(ClientID, MsgKey, Payload, Ts) ->
     TxOpts = #{
-        db => ?DS_DB,
+        db => ?DB_PAYLOAD,
         shard => {auto, ClientID},
         %% TODO: use several generations for retention
         generation => 1,
         sync => true,
-        retries => 1
+        retries => ?PAYLOAD_TX_RETRIES
     },
-    PayloadTopic = payload_topic(ClientID, MsgKey),
-    PayloadBin = pack_payload(Payload, Ts),
+    PayloadTopic = ?MSG_KEY_TOPIC(ClientID, MsgKey),
+    PayloadBin = pack_msg(Payload, Ts),
     TxFun = fun() ->
         emqx_ds:tx_del_topic(PayloadTopic),
         emqx_ds:tx_write(PayloadTopic, ?ds_tx_ts_monotonic, PayloadBin)
     end,
     case emqx_ds:trans(TxOpts, TxFun) of
-        {Ref, ok} ->
-            {ok, Ref};
-        {error, Recoverable, Reason} ->
-            % TODO: retry
-            {error, {Recoverable, Reason}}
+        {atomic, _Serial, ok} ->
+            ok;
+        {error, IsRecoverable, Reason} ->
+            {error, {IsRecoverable, Reason}}
     end.
-
-payload_topic(ClientID, MsgKey) ->
-    [?payload, ClientID, ?key, MsgKey].
-
-pack_payload(Payload, Ts) ->
-    %% TODO
-    %% pack with ASN.1
-    term_to_binary({Payload, Ts}).
-
-unpack_payload(Payload) ->
-    %% TODO
-    {_Payload, _Ts} = binary_to_term(Payload).
 
 %% @doc Ack and fetch a batch of messages starting from the given seqno.
--spec ack_and_fetch_next_batch(ClientID :: binary(), no_ack | seqno(), Limit :: non_neg_integer()) ->
-    [msg()].
-ack_and_fetch_next_batch(ClientID, LastSeqno0, Limit) ->
-    LastSeqno =
-        case is_integer(LastSeqno0) of
-            true ->
-                ok = mark_acked(ClientID, LastSeqno0),
-                LastSeqno0;
-            false ->
-                #?STATE_REC{acked = Acked} = read_state(ClientID),
-                Acked
-        end,
-    fetch_batch_loop(ClientID, LastSeqno, Limit, []).
+-spec ack_and_fetch_next_batch(read_state(), _Limit :: non_neg_integer()) ->
+    {ok, [msg()], read_state()}.
+ack_and_fetch_next_batch(ReadState, Limit) ->
+    maybe
+        ok ?= persist_read_state(ReadState),
+        {ok, Batch} ?= fetch_batch(ReadState, Limit),
+        {ok, Batch, ReadState}
+    end.
 
-%% @private Fetch messages to be sent to a consumer.
-fetch_batch_loop(_ClientID, _LastSeqno, 0, Acc) ->
-    lists:reverse(Acc);
-fetch_batch_loop(ClientID, LastSeqno, Limit, Acc) ->
-    case mnesia:dirty_next(?INDEX_TAB, ?INDEX_KEY(ClientID, LastSeqno)) of
-        ?INDEX_KEY(ClientID, NextSeqno) = IndexKey ->
-            case mnesia:dirty_read(?INDEX_TAB, IndexKey) of
+fetch_batch(ReadState, Limit) ->
+    case get_iterator(ReadState) of
+        {error, _} = Error ->
+            Error;
+        {ok, undefined} ->
+            {ok, [], ReadState};
+        {ok, It0} ->
+            case emqx_ds:next(It0, Limit) of
+                {ok, It, Values} ->
+                    Msgs = lists:map(fun unpack_msg/1, Values),
+                    {ok, Msgs, ReadState#{it => It}};
+                {ok, end_of_stream} ->
+                    %% TODO
+                    %% Handle generation rotation
+                    {ok, [], ReadState};
+                {error, IsRecoverable, Reason} ->
+                    {error, {IsRecoverable, Reason}}
+            end
+    end.
+
+get_iterator(#{clientid := ClientID, it := undefined}) ->
+    Filter = ?MSG_KEY_TOPIC(ClientID, '#'),
+    Shard = emqx_gs:shard_of(ClientID),
+    maybe
+        {[{_Slab, Stream}], []} ?= emqx_gs:get_streams(?DB_PAYLOAD, Filter, 0, #{shard => Shard}),
+        {ok, It} ?= emqx_gs:make_iterator(?DB_PAYLOAD, Stream, Filter, 0),
+        {ok, It}
+    else
+        {[], []} ->
+            {ok, undefined};
+        {MultipleStreams, []} when is_list(MultipleStreams) ->
+            ?LOG(error, "multiple_streams", #{multiple_streams => MultipleStreams, shard => Shard}),
+            {error, {multiple_streams, MultipleStreams}};
+        {_, Errors} when is_list(Errors) ->
+            ?LOG(error, "shard_errors", #{errors => Errors, shard => Shard}),
+            {error, {shard_errors, Errors}};
+        {error, IsRecoverable, Reason} ->
+            {error, {IsRecoverable, Reason}}
+    end;
+get_iterator(#{it := It}) ->
+    {ok, It}.
+
+init_read_state(ClientID) ->
+    TxOpts = #{
+        db => ?DB_READ_STATE,
+        shard => {auto, ClientID},
+        sync => true,
+        retries => ?READ_STATE_INIT_TX_RETRIES
+    },
+    TxFun = fun() ->
+        emqx_ds:tx_read(?READ_STATE_TOPIC(ClientID))
+    end,
+    case emqx_ds:trans(TxOpts, TxFun) of
+        [{atomic, _Serial, Values}] ->
+            case Values of
+                [{_Topic, 0, Bin}] ->
+                    {ok, unpack_read_state(ClientID, Bin)};
                 [] ->
-                    %% The index is deleted due to race condition.
-                    %% May happen due to lack of atomicity of the transaction.
-                    fetch_batch_loop(ClientID, NextSeqno, Limit, Acc);
-                [#?INDEX_REC{msg_key = MsgKey, ts = Ts}] ->
-                    case
-                        mnesia:dirty_read(
-                            ?PAYLOAD_TAB, ?PAYLOAD_KEY(ClientID, MsgKey, NextSeqno, Ts)
-                        )
-                    of
-                        [] ->
-                            %% The payload is deleted due to race condition.
-                            %% May happen due to lack of atomicity of the transaction.
-                            fetch_batch_loop(ClientID, NextSeqno, Limit, Acc);
-                        [#?PAYLOAD_REC{payload = Payload}] ->
-                            NewAcc = [
-                                #{seqno => NextSeqno, msg_key => MsgKey, payload => Payload} | Acc
-                            ],
-                            fetch_batch_loop(ClientID, NextSeqno, Limit - 1, NewAcc)
-                    end
+                    {ok, new_read_state(ClientID)}
             end;
-        _ ->
-            lists:reverse(Acc)
+        {error, IsRecoverable, Reason} ->
+            {error, {IsRecoverable, Reason}}
     end.
 
-%% @doc Acknowledge messages before the given seqno.
--spec mark_acked(ClientID :: binary(), Seqno :: seqno()) -> ok.
-mark_acked(ClientID, Seqno) ->
-    State = read_state(ClientID),
-    NewState = State#?STATE_REC{acked = Seqno, last_ack_ts = now_ts()},
-    mria:dirty_write(?STATE_TAB, NewState).
-
-%% @private Traverse backward to find and delete the payload records for the given payload key (if any).
-%% Returns the list of deleted sequence numbers.
-delete_old_payload(PayloadKey) ->
-    delete_old_payload(PayloadKey, []).
-
-delete_old_payload(?PAYLOAD_KEY(ClientID, MsgKey, _Seqno, _) = Key, Acc) ->
-    case mnesia:dirty_prev(?PAYLOAD_TAB, Key) of
-        ?PAYLOAD_KEY(ClientID, MsgKey, PrevSeqno, _) = PrevKey ->
-            delete_old_payload(PrevKey, [PrevSeqno | Acc]);
-        _ ->
-            lists:reverse(Acc)
+persist_read_state(#{clientid := ClientID} = ReadState) ->
+    TxOpts = #{
+        db => ?DB_READ_STATE,
+        shard => {auto, ClientID},
+        sync => true,
+        retries => ?READ_STATE_UPDATE_TX_RETRIES
+    },
+    Bin = pack_read_state(ReadState),
+    TxFun = fun() ->
+        emqx_ds:tx_write({?READ_STATE_TOPIC(ClientID), 0, Bin})
+    end,
+    case emqx_ds:trans(TxOpts, TxFun) of
+        {atomic, _Serial, Res} ->
+            Res;
+        {error, IsRecoverable, Reason} ->
+            {error, {IsRecoverable, Reason}}
     end.
 
-%% @private Delete the index records (after payload is deleted).
-delete_index(_ClientID, []) ->
-    ok;
-delete_index(ClientID, [Seqno | Seqnos]) ->
-    mria:dirty_delete(?INDEX_TAB, ?INDEX_KEY(ClientID, Seqno)),
-    delete_index(ClientID, Seqnos).
+new_read_state(ClientID) ->
+    #{clientid => ClientID, it => undefined}.
 
-read_state(ClientID) ->
-    case mnesia:dirty_read(?STATE_TAB, ClientID) of
-        [State] ->
-            State;
-        [] ->
-            State = new_state(ClientID),
-            mria:dirty_write(?STATE_TAB, State),
-            State
-    end.
+%%--------------------------------------------------------------------
+%% Serialization
+%%--------------------------------------------------------------------
 
-new_state(ClientID) ->
-    #?STATE_REC{clientid = ClientID}.
+pack_msg(Payload, Ts) ->
+    term_to_binary(#{
+        ?msg_schema_version => ?SCHEMA_VERSION,
+        ?msg_ts => Ts,
+        ?msg_payload => Payload
+    }).
 
-now_ts() ->
-    erlang:system_time(millisecond).
+unpack_msg({?MSG_KEY_TOPIC(_ClientID, MsgKey), Seqno, Payload}) ->
+    %% NOTE
+    %% By far we do not need Ts
+    #{
+        ?msg_schema_version := ?SCHEMA_VERSION,
+        ?msg_payload := Value
+    } = binary_to_term(Payload),
+    #{
+        seqno => Seqno,
+        msg_key => MsgKey,
+        payload => Value
+    }.
+
+pack_read_state(#{it := It}) ->
+    term_to_binary(#{
+        ?read_state_schema_version => ?SCHEMA_VERSION,
+        ?read_state_it => It
+    }).
+
+unpack_read_state(ClientId, Bin) ->
+    #{
+        ?read_state_schema_version := ?SCHEMA_VERSION,
+        ?read_state_it := It
+    } = binary_to_term(Bin),
+    #{it => It, clientid => ClientId}.

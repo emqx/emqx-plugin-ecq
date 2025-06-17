@@ -13,7 +13,8 @@
 %% ets
 -define(INFLIGHT_TAB, ecq_inflight).
 
--define(DS_DB, ecq).
+-define(DB_PAYLOAD, ecq_payload).
+-define(DB_READ_STATE, ecq_read_state).
 
 -define(WRITER_POOL, emqx_ecq_writer).
 -define(READER_REG_POOL, emqx_ecq_reader_reg).
@@ -33,8 +34,6 @@
 -define(POLL_BATCH_SIZE, 10).
 
 %% DS
--define(payload, <<"payload">>).
--define(key, <<"msg_key">>).
 -define(ds_tx_ts_monotonic, tx_ts_monotonic).
 
 -endif.

@@ -40,4 +40,4 @@ on_health_check(Options) ->
     emqx_ecq:on_health_check(Options).
 
 init_store() ->
-    ok = emqx_ecq_store:open_ds_db().
+    ok = emqx_ecq_store:open_db().

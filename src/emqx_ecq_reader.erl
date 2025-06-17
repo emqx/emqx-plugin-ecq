@@ -24,16 +24,10 @@
     code_change/3
 ]).
 
-%% RPC handler
--export([handle_poll_local/2]).
-
 -include("emqx_ecq.hrl").
 
--record(poll_notification, {
-    last_acked :: seqno()
-}).
+-record(poll_notification, {}).
 
--type msg() :: emqx_ecq_store:msg().
 -define(LAST_HEARTBEAT_TS, ecq_last_heartbeat_ts).
 
 %% @doc Start one agent process.
@@ -48,7 +42,7 @@ start_link(ClientID, SubPid) ->
 -spec subscribed(clientid()) -> ok.
 subscribed(ClientID) ->
     ReaderPid = ensure_reader(ClientID),
-    notify_poll(ReaderPid, ?NO_ACK).
+    notify_poll(ReaderPid).
 
 ensure_reader(ClientID) ->
     case get_reader_pd() of
@@ -58,7 +52,7 @@ ensure_reader(ClientID) ->
             ok = emqx_ecq_reader_reg:add(self(), ReaderPid),
             ?LOG(debug, "reader_registered", #{reader => ReaderPid}),
             ReaderPid;
-        ReaderPid ->
+        #{pid := ReaderPid} ->
             ReaderPid
     end.
 
@@ -76,7 +70,7 @@ acked(Seqno) ->
             ok;
         false ->
             %% then notify the agent to read a new batch.
-            notify_poll(Seqno)
+            notify_poll()
     end.
 
 %% @doc Heartbeat to ensure messages are eventually delivered,
@@ -87,12 +81,12 @@ heartbeat() ->
         undefined ->
             %% not a ECQ consumer
             ok;
-        #{seqno := LastAcked, last_ack_ts := LastTs} ->
+        #{last_ack_ts := LastTs} ->
             SubPid = self(),
-            heartbeat2(SubPid, LastAcked, LastTs)
+            heartbeat2(SubPid, LastTs)
     end.
 
-heartbeat2(SubPid, LastAcked, LastTs) ->
+heartbeat2(SubPid, LastTs) ->
     HbTs = get(?LAST_HEARTBEAT_TS),
     MaxTs =
         case HbTs of
@@ -103,27 +97,27 @@ heartbeat2(SubPid, LastAcked, LastTs) ->
         end,
     case now_ts() - MaxTs > ?HEARTBEAT_POLL_INTERVAL of
         true ->
-            heartbeat3(SubPid, LastAcked);
+            heartbeat3(SubPid);
         false ->
             ok
     end.
 
-heartbeat3(SubPid, LastAcked) ->
+heartbeat3(SubPid) ->
     case emqx_ecq_inflight:exists(SubPid) of
         true ->
-            %% There is inflight messages, wait for ack to trigger the next poll.
+            %% There are inflight messages, wait for ack to trigger the next poll.
             ok;
         false ->
             put(?LAST_HEARTBEAT_TS, now_ts()),
-            notify_poll(LastAcked)
+            notify_poll()
     end.
 
-notify_poll(LastAcked) ->
+notify_poll() ->
     #{pid := ReaderPid} = get_reader_pd(),
-    notify_poll(ReaderPid, LastAcked).
+    notify_poll(ReaderPid).
 
-notify_poll(ReaderPid, LastAcked) ->
-    gen_server:cast(ReaderPid, #poll_notification{last_acked = LastAcked}).
+notify_poll(ReaderPid) ->
+    gen_server:cast(ReaderPid, #poll_notification{}).
 
 %% gen_server callbacks
 init([ClientID, SubPid]) ->
@@ -131,21 +125,29 @@ init([ClientID, SubPid]) ->
     emqx_logger:set_proc_metadata(#{
         clientid => ClientID
     }),
-    {ok, #{clientid => ClientID, sub_pid => SubPid}}.
+    case emqx_ecq_store:init_read_state(ClientID) of
+        {ok, ReadState} ->
+            {ok, #{clientid => ClientID, sub_pid => SubPid, read_state => ReadState}};
+        {error, Error} ->
+            {stop, Error}
+    end.
 
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast(
-    #poll_notification{last_acked = LastAcked}, #{sub_pid := SubPid} = State
+    #poll_notification{}, #{sub_pid := SubPid} = State0
 ) ->
-    case emqx_ecq_inflight:exists(SubPid) of
-        true ->
-            %% there are inflight messages, wait for ack to trigger the next poll.
-            ok;
-        false ->
-            handle_poll_notification(LastAcked, State)
-    end,
+    %% TODO
+    %% Can data race happen here?
+    State =
+        case emqx_ecq_inflight:exists(SubPid) of
+            true ->
+                %% there are inflight messages, wait for ack to trigger the next poll.
+                State0;
+            false ->
+                handle_poll(State0)
+        end,
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -186,7 +188,7 @@ notify(ClientID) ->
                             ok;
                         [ReaderPid] ->
                             ?LOG(debug, "notify_reader", #{subscriber => ClientID}),
-                            notify_poll(ReaderPid, ?NO_ACK)
+                            notify_poll(ReaderPid)
                     end
             end;
         _ ->
@@ -214,39 +216,16 @@ sub_topic(ClientID) ->
 pub_topic(ClientID, MsgKey) ->
     <<"$ECQ/", ClientID/binary, "/", MsgKey/binary>>.
 
-handle_poll_notification(LastAcked, #{clientid := ClientID, sub_pid := SubPid}) ->
-    Batch =
-        case emqx_ecq_writer_dist:pick_core_node(ClientID) of
-            {ok, Node} ->
-                rpc_call(Node, ?MODULE, handle_poll_local, [ClientID, LastAcked], []);
-            {error, no_running_core_nodes} ->
-                ?LOG(warning, "no_running_core_nodes", #{
-                    explain => "will trigger a retry later when the subscriber sends any PUBACK"
-                }),
-                []
-        end,
-    ok = deliver_batch(ClientID, SubPid, Batch).
-
-rpc_call(Node, M, F, A, Default) ->
-    Timeout = emqx_ecq_config:get_read_timeout(),
-    try
-        erpc:call(Node, M, F, A, Timeout)
-    catch
-        C:E ->
-            ?LOG(warning, "failed_to_read_batch", #{
-                node => Node,
-                exception => C,
-                cause => E,
-                explain => "will trigger a retry later when the subscriber sends any PUBACK"
-            }),
-            Default
-    end.
-
-%% @doc Handle poll notification on the core node.
--spec handle_poll_local(clientid(), ?NO_ACK | seqno()) -> [msg()].
-handle_poll_local(ClientID, LastAcked) ->
+handle_poll(#{clientid := ClientID, sub_pid := SubPid, read_state := ReadState0} = State) ->
     BatchSize = emqx_ecq_config:get_reader_batch_size(),
-    emqx_ecq_store:ack_and_fetch_next_batch(ClientID, LastAcked, BatchSize).
+    case emqx_ecq_store:ack_and_fetch_next_batch(ReadState0, BatchSize) of
+        {ok, Batch, ReadState} ->
+            ok = deliver_batch(ClientID, SubPid, Batch),
+            State#{read_state := ReadState};
+        {error, Reason} ->
+            ?LOG(error, "failed_to_fetch_next_batch", #{reason => Reason}),
+            State
+    end.
 
 deliver_batch(_ClientID, _SubPid, []) ->
     ?LOG(debug, "no_message_to_forward", #{batch_size => 0}),
