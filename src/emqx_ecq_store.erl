@@ -41,9 +41,10 @@
 -define(msg_ts, 2).
 -define(msg_payload, 3).
 
--define(PAYLOAD_TX_RETRIES, 1).
+-define(PAYLOAD_TX_RETRIES, 5).
+-define(PAYLOAD_TX_RETRY_INTERVAL, 100).
 -define(READ_STATE_INIT_TX_RETRIES, 5).
--define(READ_STATE_UPDATE_TX_RETRIES, 1).
+-define(READ_STATE_UPDATE_TX_RETRIES, 5).
 
 -define(DB_PAYLOAD_LTS_SETTINGS, #{
     %% "payload/CLIENT_ID/msg_key/MSG_KEY"
@@ -70,6 +71,7 @@
 -spec open_db() -> ok | {error, term()}.
 open_db() ->
     maybe
+        %% We need 2 dbs because we need different retention policies for payloads and read states.
         ok ?= open_db(?DB_PAYLOAD, db_settings(?DB_PAYLOAD_LTS_SETTINGS)),
         ok = open_db(?DB_READ_STATE, db_settings(?DB_READ_STATE_LTS_SETTINGS))
     end.
@@ -83,7 +85,8 @@ append(ClientID, MsgKey, Payload, Ts) ->
         %% TODO: use several generations for retention
         generation => 1,
         sync => true,
-        retries => ?PAYLOAD_TX_RETRIES
+        retries => ?PAYLOAD_TX_RETRIES,
+        retry_interval => ?PAYLOAD_TX_RETRY_INTERVAL
     },
     PayloadTopic = ?MSG_KEY_TOPIC(ClientID, MsgKey),
     PayloadBin = pack_msg(Payload, Ts),
@@ -183,9 +186,9 @@ db_settings(LtsSettings) ->
     #{
         transaction =>
             #{
-                flush_interval => 5000,
-                idle_flush_interval => 1,
-                conflict_window => 5000
+                flush_interval => 100,
+                idle_flush_interval => 20,
+                conflict_window => 10_000
             },
         storage =>
             {emqx_ds_storage_skipstream_lts_v2, LtsSettings},
@@ -194,7 +197,7 @@ db_settings(LtsSettings) ->
         n_shards => 16,
         replication_options => #{},
         n_sites => 3,
-        replication_factor => 2
+        replication_factor => 1
     }.
 
 open_db(DB, Settings) ->

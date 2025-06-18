@@ -16,7 +16,6 @@
 -define(DB_PAYLOAD, ecq_payload).
 -define(DB_READ_STATE, ecq_read_state).
 
--define(WRITER_POOL, emqx_ecq_writer).
 -define(READER_REG_POOL, emqx_ecq_reader_reg).
 
 -include_lib("emqx_plugin_helper/include/logger.hrl").
@@ -35,5 +34,6 @@
 
 %% DS
 -define(ds_tx_ts_monotonic, tx_ts_monotonic).
+-define(ds_tx_commit_reply(REF, REPLY), REPLY = {'DOWN', REF, _, _, _}).
 
 -endif.

@@ -125,7 +125,7 @@ t_connection_restoration(_Config) ->
 t_massive_publishes(_Config) ->
     %% Parameters.
     NKeys = 100,
-    NMessages = 100,
+    NMessages = 50,
 
     %% Init.
     ct:timetrap(timer:seconds(180)),

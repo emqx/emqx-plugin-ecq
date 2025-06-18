@@ -4,8 +4,6 @@
 
 -module(emqx_ecq_writer).
 
--export([start_link/2]).
-
 -export([
     append/4
 ]).
@@ -15,95 +13,23 @@
     notify_reader_local/1
 ]).
 
--export([
-    init/1,
-    handle_call/3,
-    handle_cast/2,
-    handle_info/2,
-    terminate/2,
-    code_change/3
-]).
-
 -include("emqx_ecq.hrl").
 
--record(append_req, {
-    clientid :: clientid(),
-    msg_key :: binary(),
-    payload :: binary(),
-    msg_ts :: ts(),
-    deadline :: non_neg_integer()
-}).
-
-%% @doc Start one writer process.
-start_link(Pool, Id) ->
-    gen_server:start_link(
-        {local, emqx_utils:proc_name(Pool, Id)},
-        ?MODULE,
-        [Pool, Id],
-        [{hibernate_after, 1000}]
-    ).
-
-%% @doc Append a message to a queue.
 -spec append(clientid(), msg_key(), binary(), ts()) -> ok | {error, Reason :: term()}.
-append(ClientID, MsgKey, Payload, MsgTs) ->
-    Req = #append_req{clientid = ClientID, msg_key = MsgKey, payload = Payload, msg_ts = MsgTs},
-    Timeout = emqx_ecq_config:get_write_timeout(),
-    Deadline = now_ts() + Timeout,
-    WriterPid = gproc_pool:pick_worker(?WRITER_POOL, ClientID),
-    try
-        gen_server:call(
-            WriterPid,
-            Req#append_req{deadline = Deadline},
-            Timeout + 100
-        )
-    catch
-        exit:Reason ->
+append(ClientID, MsgKey, Payload, Ts) ->
+    {Time, Res} = timer:tc(emqx_ecq_store, append, [ClientID, MsgKey, Payload, Ts]),
+    case Res of
+        ok ->
+            ?LOG(debug, "append_message_success", #{
+                subscriber => ClientID, msg_key => MsgKey, time_us => Time
+            }),
+            ok = maybe_notify_reader(ClientID),
+            ok;
+        {error, Reason} ->
+            ?LOG(error, "append_message_error", #{
+                subscriber => ClientID, msg_key => MsgKey, reason => Reason, time_us => Time
+            }),
             {error, Reason}
-    end.
-
-init([Pool, Id]) ->
-    true = gproc_pool:connect_worker(Pool, {Pool, Id}),
-    {ok, #{pool => Pool, id => Id}}.
-
-handle_call(#append_req{} = Req, _From, State) ->
-    case now_ts() > Req#append_req.deadline of
-        true ->
-            %% timedout, the caller will timeout the gen_call
-            {noreply, State};
-        false ->
-            {reply, handle_append(Req, State), State}
-    end;
-handle_call(_Request, _From, State) ->
-    {reply, ignored, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-now_ts() ->
-    erlang:system_time(millisecond).
-
-handle_append(
-    #append_req{
-        clientid = ClientID,
-        msg_key = MsgKey,
-        payload = Payload,
-        msg_ts = Ts
-    },
-    _State
-) ->
-    maybe
-        ok ?= emqx_ecq_store:append(ClientID, MsgKey, Payload, Ts),
-        ?LOG(debug, "succeeded_to_append_message", #{subscriber => ClientID, msg_key => MsgKey}),
-        ok = maybe_notify_reader(ClientID)
     end.
 
 %% Lookup session registry to find if the consumer client is online. If yes, send the notification to the connected node.
