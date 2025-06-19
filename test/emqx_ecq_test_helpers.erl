@@ -24,5 +24,3 @@ is_test_function(F) ->
         "t_" ++ _ -> true;
         _ -> false
     end.
-
-

@@ -32,7 +32,8 @@ append(ClientID, MsgKey, Payload, Ts) ->
             {error, Reason}
     end.
 
-%% Lookup session registry to find if the consumer client is online. If yes, send the notification to the connected node.
+%% Lookup session registry to find if the consumer client is online.
+%% If yes, send the notification to the connected node.
 maybe_notify_reader(ClientID) ->
     case emqx_cm:lookup_channels(ClientID) of
         [] ->

@@ -105,7 +105,8 @@ t_compaction(_Config) ->
     ok = stop_client(PubPid),
     ok = stop_client(SubPid).
 
-%% Reconnected client should not receive already received messages, should receive only new messages.
+%% Reconnected client should not receive already received messages,
+%% should receive only new messages.
 t_connection_restoration(_Config) ->
     SubClientID = random_clientid("sub-"),
     {ok, SubPid0} = start_subscriber(SubClientID),
