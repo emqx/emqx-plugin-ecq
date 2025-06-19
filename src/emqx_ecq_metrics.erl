@@ -126,12 +126,22 @@ do_format_hist(Id, HistName, Count, IncrementalBucketCounts) ->
     ].
 
 %% Convert from incremental counts to individual bucket counts.
-bucket_counts(IncrementalBucketCounts) -> do_bucket_counts([{0, 0} | IncrementalBucketCounts]).
+bucket_counts(IncrementalBucketCounts) ->
+    trim_zeroes(do_bucket_counts([{0, 0} | IncrementalBucketCounts])).
+
+trim_zeroes(BucketCounts0) ->
+    BucketCounts1 = do_trim_zeroes(BucketCounts0),
+    lists:reverse(do_trim_zeroes(lists:reverse(BucketCounts1))).
 
 do_bucket_counts([{_, PrevCount}, {Bucket, Count} | IncrementalBucketCounts]) ->
     [{Bucket, Count - PrevCount} | do_bucket_counts([{Bucket, Count} | IncrementalBucketCounts])];
 do_bucket_counts(_) ->
     [].
+
+do_trim_zeroes([{Bucket, 0}, {_, 0} | Rest]) ->
+    do_trim_zeroes([{Bucket, 0} | Rest]);
+do_trim_zeroes(Other) ->
+    Other.
 
 format_row({Bucket, Count}, 0) ->
     [
