@@ -9,18 +9,12 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
-all() ->
-    [
-        F
-     || {F, _} <- ?MODULE:module_info(exports),
-        is_test_function(F)
-    ].
+%%--------------------------------------------------------------------
+%% CT boilerplate
+%%--------------------------------------------------------------------
 
-is_test_function(F) ->
-    case atom_to_list(F) of
-        "t_" ++ _ -> true;
-        _ -> false
-    end.
+all() ->
+    emqx_ecq_test_helpers:all(?MODULE).
 
 init_per_suite(Config) ->
     Config.
@@ -34,70 +28,59 @@ init_per_testcase(_Case, Config) ->
 end_per_testcase(_Case, _Config) ->
     ok.
 
+%%--------------------------------------------------------------------
+%% Test cases
+%%--------------------------------------------------------------------
+
 %% Consumer connect and subscribe, message is published while the consumer is online.
 t_realtime_dispatch(_Config) ->
     SubClientID = random_clientid("sub-"),
     {ok, SubPid} = start_subscriber(SubClientID),
-    try
-        {ok, PubPid} = start_publisher(),
-        try
-            Key = <<"key/1">>,
-            {ok, DataToExpect} = publish_data(PubPid, SubClientID, Key),
-            ok = assert_payload_received(SubPid, Key, DataToExpect)
-        after
-            ok = stop_client(PubPid)
-        end
-    after
-        ok = stop_client(SubPid)
-    end.
+    {ok, PubPid} = start_publisher(),
+    Key = <<"key/1">>,
+    {ok, DataToExpect} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_exact_payload_received(SubPid, SubClientID, Key, DataToExpect),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
 %% A message is published by publisher, then a subscriber connects and subscribes.
 t_late_subscribe(_Config) ->
     SubClientID = random_clientid("sub-"),
     Key = <<"key/1">>,
     {ok, PubPid} = start_publisher(),
-    try
-        {ok, Data} = publish_data(PubPid, SubClientID, Key),
-        {ok, SubPid} = start_subscriber(SubClientID),
-        try
-            ok = assert_payload_received(SubPid, Key, Data)
-        after
-            ok = stop_client(SubPid)
-        end
-    after
-        ok = stop_client(PubPid)
-    end.
+    {ok, Data} = publish_data(PubPid, SubClientID, Key),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    ok = assert_exact_payload_received(SubPid, SubClientID, Key, Data),
+    ok = stop_client(SubPid),
+    ok = stop_client(PubPid).
 
 t_direct_publish_to_ecq_topic_is_not_allowed(_Config) ->
     {ok, PubPid} = start_publisher(),
     SubClientID = random_clientid("sub-"),
     {ok, SubPid} = start_subscriber(SubClientID),
     Key = <<"key/1">>,
-    try
-        %% This publish should not be sent to the subscriber (terminated by the plugin).
-        {ok, _} = emqtt:publish(PubPid, bin(["$ECQ/", SubClientID, "/", Key]), <<"data1">>, 1),
-        %% This publish should be sent to the subscriber.
-        {ok, _} = emqtt:publish(PubPid, bin(["normal/", SubClientID, "/", Key]), <<"data2">>, 1),
-        receive
-            {publish_received, SubPid, SubClientID, Msg} ->
-                ?assertMatch(#{qos := 1}, Msg),
-                ?assertEqual(<<"data2">>, maps:get(payload, Msg)),
-                Topic = maps:get(topic, Msg),
-                ExpectedTopic = bin(["normal/", SubClientID, "/", Key]),
-                ?assertEqual(ExpectedTopic, Topic)
-        after 10000 ->
-            ct:fail(#{reason => timeout})
-        end,
-        receive
-            {publish_received, SubPid, SubClientID, _Msg} ->
-                ct:fail(#{reason => "should not reach here"})
-        after 500 ->
-            ok
-        end
-    after
-        ok = stop_client(PubPid),
-        ok = stop_client(SubPid)
-    end.
+    %% This publish should not be sent to the subscriber (terminated by the plugin).
+    {ok, _} = emqtt:publish(PubPid, bin(["$ECQ/", SubClientID, "/", Key]), <<"data1">>, 1),
+    %% This publish should be sent to the subscriber.
+    {ok, _} = emqtt:publish(PubPid, bin(["normal/", SubClientID, "/", Key]), <<"data2">>, 1),
+    receive
+        {publish_received, SubPid, SubClientID, Msg} ->
+            ?assertMatch(#{qos := 1}, Msg),
+            ?assertEqual(<<"data2">>, maps:get(payload, Msg)),
+            Topic = maps:get(topic, Msg),
+            ExpectedTopic = bin(["normal/", SubClientID, "/", Key]),
+            ?assertEqual(ExpectedTopic, Topic)
+    after 10000 ->
+        ct:fail(#{reason => timeout})
+    end,
+    receive
+        {publish_received, SubPid, SubClientID, _Msg} ->
+            ct:fail(#{reason => "should not reach here"})
+    after 500 ->
+        ok
+    end,
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
 %% A subscriber disconnects, then reconnects with session persisted.
 %% It will not queue the message in its session state while it is offline.
@@ -107,21 +90,203 @@ t_disconnected_session_does_not_queue_messages(_Config) ->
     ok.
 
 t_compaction(_Config) ->
-    %% TODO: publish the same key multiple times
-    %% expect to consume the latest value
-    ok.
+    {ok, PubPid} = start_publisher(),
+    SubClientID = random_clientid("sub-"),
+    Key = <<"key/1">>,
+    lists:foreach(
+        fun(_) ->
+            {ok, _Data} = publish_data(PubPid, SubClientID, Key)
+        end,
+        lists:seq(1, 100)
+    ),
+    {ok, Data} = publish_data(PubPid, SubClientID, Key),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    ok = assert_exact_payload_received(SubPid, SubClientID, Key, Data),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid).
 
-assert_payload_received(SubPid, Key, Data) ->
+%% Reconnected client should not receive already received messages,
+%% should receive only new messages.
+t_connection_restoration(_Config) ->
+    SubClientID = random_clientid("sub-"),
+    {ok, SubPid0} = start_subscriber(SubClientID),
+    Key = <<"key/1">>,
+    {ok, PubPid} = start_publisher(),
+    {ok, Data0} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_exact_payload_received(SubPid0, SubClientID, Key, Data0),
+    ok = stop_client(SubPid0),
+    {ok, SubPid1} = start_subscriber(SubClientID),
+    ok = assert_not_received(SubPid1, SubClientID, Key),
+    {ok, Data1} = publish_data(PubPid, SubClientID, Key),
+    ok = assert_exact_payload_received(SubPid1, SubClientID, Key, Data1),
+    ok = stop_client(PubPid),
+    ok = stop_client(SubPid1).
+
+t_metrics_format(_Config) ->
+    meck:new(emqx_ecq_metrics, [passthrough]),
+    meck:expect(emqx_ecq_metrics, get_metrics, fun(_) ->
+        #{
+            counters => #{},
+            rate => #{},
+            gauges => #{},
+            hists =>
+                #{
+                    append =>
+                        #{
+                            count => 1754,
+                            sum => 266440,
+                            bucket_counts =>
+                                [
+                                    {10, 0},
+                                    {20, 0},
+                                    {50, 111},
+                                    {100, 209},
+                                    {200, 1401},
+                                    {500, 1754},
+                                    {1000, 1754},
+                                    {2000, 1754},
+                                    {5000, 1754},
+                                    {10000, 1754},
+                                    {20000, 1754},
+                                    {infinity, 1754}
+                                ]
+                        }
+                },
+            slides => #{}
+        }
+    end),
+    IoData = emqx_ecq_metrics:format_hist(ds_latency, append),
+    ct:print("~s", [IoData]),
+    meck:unload(emqx_ecq_metrics).
+
+%% Publish many messages to many keys.
+t_massive_publishes(_Config) ->
+    %% Parameters.
+    NKeys = 100,
+    NMessages = 50,
+
+    %% Init.
+    ct:timetrap(timer:seconds(180)),
+    SubClientID = random_clientid("sub-"),
+    {ok, SubPid} = start_subscriber(SubClientID),
+    Self = self(),
+
+    %% Function to publish N messages for a given key asynchronously.
+    PubN = fun(Key, N) ->
+        spawn_link(fun() ->
+            {ok, PubPid} = start_publisher(),
+            Payloads = lists:map(
+                fun(_) ->
+                    {ok, Data} = publish_data(PubPid, SubClientID, Key),
+                    Data
+                end,
+                lists:seq(1, N)
+            ),
+            ok = stop_client(PubPid),
+            Self ! {payloads_published, Key, lists:last(Payloads)}
+        end)
+    end,
+
+    %% Generate 100 keys to publish to.
+    Keys = lists:map(fun(N) -> <<"key/", (integer_to_binary(N))/binary>> end, lists:seq(1, NKeys)),
+
+    %% Publish 100 messages for each key.
+    lists:foreach(
+        fun(Key) ->
+            PubN(Key, NMessages)
+        end,
+        Keys
+    ),
+
+    %% Collect last message for each key.
+    KeyData = lists:map(
+        fun(_Key) ->
+            receive
+                {payloads_published, Key, Data} ->
+                    {Key, Data}
+            end
+        end,
+        Keys
+    ),
+
+    ct:print("All messages published, waiting for subscriber to receive them."),
+    %% Assert that the subscriber received the last message for each key.
+    lists:foreach(
+        fun({Key, Data}) ->
+            ok = assert_payload_received(SubPid, SubClientID, Key, Data)
+        end,
+        KeyData
+    ),
+
+    %% Print some stat.
+    N = drain_messages(SubPid, SubClientID) + NKeys,
+    ct:print("Received ~p messages from ~p", [N, NKeys * NMessages]),
+
+    %% Cleanup.
+    ok = stop_client(SubPid).
+
+%%--------------------------------------------------------------------
+%% Helper functions
+%%--------------------------------------------------------------------
+
+%% Assert that the subscriber received the exact message for a given key.
+%% Messages to other clients, topics, queues, or keys are an error.
+assert_exact_payload_received(SubPid, SubClientID, Key, Data) ->
+    ExpectedTopic = bin(["$ECQ/", SubClientID, "/", Key]),
     receive
-        {publish_received, SubPid, SubClientID, Msg} ->
-            ?assertMatch(#{qos := 1}, Msg),
-            ?assertEqual(Data, maps:get(payload, Msg)),
-            Topic = maps:get(topic, Msg),
-            ExpectedTopic = bin(["$ECQ/", SubClientID, "/", Key]),
-            ?assertEqual(ExpectedTopic, Topic),
+        {publish_received, SubPid, SubClientID, #{
+            qos := 1, topic := ExpectedTopic, payload := Data
+        }} ->
+            ok;
+        {publish_received, OtherSubPid, OtherSubClientID, OtherMsg} ->
+            ct:fail(#{
+                reason => "unexpected publish received",
+                msg => OtherMsg,
+                key => Key,
+                pid => OtherSubPid,
+                sub_clientid => OtherSubClientID
+            })
+    after 10000 ->
+        ct:fail(#{reason => timeout})
+    end.
+
+%% Assert that the subscriber received the message for a given key.
+%% Messages to other clients, topics, queues, or keys are ignored.
+assert_payload_received(SubPid, SubClientID, Key, Data) ->
+    ExpectedTopic = bin(["$ECQ/", SubClientID, "/", Key]),
+    receive
+        {publish_received, SubPid, SubClientID, #{
+            qos := 1, topic := ExpectedTopic, payload := Data
+        }} ->
             ok
     after 10000 ->
         ct:fail(#{reason => timeout})
+    end.
+
+drain_messages(SubPid, SubClientID) ->
+    drain_messages(SubPid, SubClientID, 0).
+
+drain_messages(SubPid, SubClientID, N) ->
+    receive
+        {publish_received, SubPid, SubClientID, _Msg} ->
+            drain_messages(SubPid, SubClientID, N + 1)
+    after 500 ->
+        N
+    end.
+
+assert_not_received(SubPid, SubClientID, Key) ->
+    Topic = bin(["$ECQ/", SubClientID, "/", Key]),
+    receive
+        {publish_received, SubPid, SubClientID, #{topic := Topic} = Msg} ->
+            ct:fail(#{
+                reason => "should not receive message under key",
+                topic => Topic,
+                msg => Msg,
+                key => Key,
+                sub_clientid => SubClientID
+            })
+    after 500 ->
+        ok
     end.
 
 start_publisher() ->
@@ -175,7 +340,12 @@ words(Topic) ->
     binary:split(Topic, <<"/">>, [global]).
 
 random_clientid(Prefix) ->
-    list_to_binary([Prefix, integer_to_list(erlang:system_time(millisecond))]).
+    bin([
+        Prefix,
+        integer_to_list(erlang:system_time(nanosecond)),
+        "-",
+        integer_to_list(rand:uniform(1000000))
+    ]).
 
 bin(IoData) ->
     iolist_to_binary(IoData).

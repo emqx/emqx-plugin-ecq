@@ -23,13 +23,7 @@
 start(_StartType, _StartArgs) ->
     MyRole = mria_config:whoami(),
     _ = persistent_term:put(?ROLE_PT_KEY, MyRole),
-    %% create tables only in core nodes
-    case MyRole =:= core of
-        true ->
-            create_tables();
-        false ->
-            ok
-    end,
+    ok = init_store(),
     {ok, Sup} = emqx_ecq_sup:start_link(MyRole),
     emqx_ecq:hook(),
     emqx_ctl:register_command(ecq, {emqx_ecq_cli, cmd}),
@@ -45,5 +39,5 @@ on_config_changed(OldConfig, NewConfig) ->
 on_health_check(Options) ->
     emqx_ecq:on_health_check(Options).
 
-create_tables() ->
-    ok = emqx_ecq_store:create_tables().
+init_store() ->
+    ok = emqx_ecq_store:open_db().

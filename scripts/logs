@@ -1,0 +1,10 @@
+#!/bin/bash
+
+NODES="node1.emqx.io node2.emqx.io node3.emqx.io"
+
+node_logs() {
+    local node="$1"
+    docker logs $node | perl -lne 'print if /^\d{4}-\d{2}-\d{2}/' | perl -pe "s/^([\w-:\.\+]+)(.*)/\1 $node\2/g"
+}
+
+cat <(node_logs node1.emqx.io) <(node_logs node2.emqx.io) <(node_logs node3.emqx.io) | sort

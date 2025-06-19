@@ -97,7 +97,7 @@ on_message_publish(
     {stop, do_not_allow_publish(Message)};
 on_message_publish(#message{topic = <<?ECQ_TOPIC_PREFIX, $/, Rest/binary>>} = Message) ->
     %% Do not allow publishing directly to ECQ topics.
-    ?LOG(error, "not_allowed_to_publish_to_ecq_topic", #{
+    ?LOG(warning, "not_allowed_to_publish_to_ecq_topic", #{
         topic => Message#message.topic,
         explain => "Mabye publish to $ECQ/w/" ++ binary_to_list(Rest) ++ " instead?"
     }),
@@ -110,12 +110,13 @@ on_message_publish(Message) ->
 %% @doc
 %% Called when PUBACK is received from the subscriber (vehicle).
 on_delivery_completed(
-    #message{topic = <<?ECQ_TOPIC_PREFIX, $/, _/binary>>} = Message, _
+    #message{topic = <<?ECQ_TOPIC_PREFIX, $/, _/binary>>, timestamp = Ts} = Message, _
 ) ->
     case get_seqno(Message) of
         error ->
             ok;
         Seqno when is_integer(Seqno) ->
+            ok = emqx_ecq_metrics:observe_delivery_latency(ack, Ts),
             ok = emqx_ecq_reader:acked(Seqno)
     end;
 on_delivery_completed(_, _) ->
@@ -179,20 +180,7 @@ on_health_check(_Options) ->
 %% - Return `ok' if the config is valid and can be accepted.
 on_config_changed(_OldConfig, NewConfig) ->
     Parsed = emqx_ecq_config:parse(NewConfig),
-    Before = emqx_ecq_config:get_gc_interval(),
-    emqx_ecq_config:put(Parsed),
-    After = emqx_ecq_config:get_gc_interval(),
-    case Before =:= After of
-        true ->
-            ok;
-        false ->
-            ?LOG(
-                info,
-                "gc_interval_changed_triggering_immediate_gc",
-                #{old_interval => Before, new_interval => After}
-            ),
-            emqx_ecq_gc:run()
-    end,
+    ok = emqx_ecq_config:put(Parsed),
     ok = gen_server:cast(?MODULE, {on_changed, Parsed}).
 
 %%--------------------------------------------------------------------

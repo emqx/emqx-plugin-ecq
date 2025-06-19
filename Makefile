@@ -23,7 +23,7 @@ compile: $(REBAR)
 
 .PHONY: ct
 ct: $(REBAR)
-	$(REBAR) as test ct -v
+	$(REBAR) as test ct -v --readable=true
 
 .PHONY: eunit
 eunit: $(REBAR)
@@ -63,4 +63,8 @@ fmt-check: $(REBAR)
 
 .PHONY: run
 run: rel
-	./scripts/run.sh emqx/emqx-enterprise:5.9.0
+	./scripts/run.sh emqx/emqx-enterprise:5.10.0-gf1c14e70
+
+.PHONY: run-cleanup
+run-cleanup:
+	./scripts/run.sh -c

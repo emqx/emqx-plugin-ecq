@@ -11,12 +11,6 @@
   "$data_retention_desc": {
     "en": "The retention period of fanout data. The default value is 7d."
   },
-  "$gc_interval_label": {
-    "en": "Garbage Collection Interval"
-  },
-  "$gc_interval_desc": {
-    "en": "The interval between garbage collection runs. The default value is 1h. If this config is updated on the fly, an immediate garbage collection will be triggered, followed by a new timer with the new interval."
-  },
   "$reader_batch_size_label": {
     "en": "Reader Batch Size"
   },

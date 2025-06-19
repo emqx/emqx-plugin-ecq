@@ -4,134 +4,36 @@
 
 -module(emqx_ecq_writer).
 
--export([start_link/2]).
-
 -export([
     append/4
 ]).
 
 %% RPC handlers
 -export([
-    append_local/1,
     notify_reader_local/1
-]).
-
--export([
-    init/1,
-    handle_call/3,
-    handle_cast/2,
-    handle_info/2,
-    handle_continue/2,
-    terminate/2,
-    code_change/3
 ]).
 
 -include("emqx_ecq.hrl").
 
--record(append_req, {
-    clientid :: clientid(),
-    msg_key :: binary(),
-    payload :: binary(),
-    msg_ts :: ts(),
-    deadline :: non_neg_integer()
-}).
-
-%% @doc Start one writer process.
-start_link(Pool, Id) ->
-    gen_server:start_link(
-        {local, emqx_utils:proc_name(Pool, Id)},
-        ?MODULE,
-        [Pool, Id],
-        [{hibernate_after, 1000}]
-    ).
-
-%% @doc Append a message to a queue.
 -spec append(clientid(), msg_key(), binary(), ts()) -> ok | {error, Reason :: term()}.
-append(ClientID, MsgKey, Payload, MsgTs) ->
-    Req = #append_req{clientid = ClientID, msg_key = MsgKey, payload = Payload, msg_ts = MsgTs},
-    case emqx_ecq_writer_dist:pick_core_node(ClientID) of
-        {ok, Node} ->
-            Timeout = emqx_ecq_config:get_write_timeout() + 1000,
-            try erpc:call(Node, ?MODULE, append_local, [Req], Timeout) of
-                {ok, Seqno} ->
-                    ?LOG(debug, "new_message_appended", #{subscriber => ClientID, seqno => Seqno}),
-                    %% new message appended, notify the subscriber.
-                    maybe_notify_reader(ClientID);
-                {error, Reason} ->
-                    {error, Reason}
-            catch
-                C:E ->
-                    {error, #{exception => C, cause => E}}
-            end;
+append(ClientID, MsgKey, Payload, Ts) ->
+    {Time, Res} = timer:tc(emqx_ecq_store, append, [ClientID, MsgKey, Payload, Ts]),
+    case Res of
+        ok ->
+            ?LOG(debug, "append_message_success", #{
+                subscriber => ClientID, msg_key => MsgKey, time_us => Time
+            }),
+            ok = maybe_notify_reader(ClientID),
+            ok;
         {error, Reason} ->
+            ?LOG(error, "append_message_error", #{
+                subscriber => ClientID, msg_key => MsgKey, reason => Reason, time_us => Time
+            }),
             {error, Reason}
     end.
 
-%% @doc Handle RPC call to append a message to a queue.
--spec append_local(#append_req{}) -> {ok, seqno()} | {error, Reason :: term()}.
-append_local(#append_req{clientid = ClientID} = Req) ->
-    Timeout = emqx_ecq_config:get_write_timeout(),
-    Deadline = now_ts() + Timeout,
-    WriterPid = gproc_pool:pick_worker(?WRITER_POOL, ClientID),
-    try
-        gen_server:call(
-            WriterPid,
-            Req#append_req{deadline = Deadline},
-            Timeout + 100
-        )
-    catch
-        exit:Reason ->
-            {error, Reason}
-    end.
-
-init([Pool, Id]) ->
-    true = gproc_pool:connect_worker(Pool, {Pool, Id}),
-    {ok, #{pool => Pool, id => Id}, {continue, wait_for_tables}}.
-
-handle_continue(wait_for_tables, State) ->
-    emqx_ecq_store:wait_for_tables(),
-    {noreply, State}.
-
-handle_call(#append_req{} = Req, _From, State) ->
-    case now_ts() > Req#append_req.deadline of
-        true ->
-            %% timedout, the caller will timeout the gen_call
-            {noreply, State};
-        false ->
-            {ok, Seqno, NewState} = handle_append(Req, State),
-            {reply, {ok, Seqno}, NewState}
-    end;
-handle_call(_Request, _From, State) ->
-    {reply, ignored, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-now_ts() ->
-    erlang:system_time(millisecond).
-
-handle_append(
-    #append_req{
-        clientid = ClientID,
-        msg_key = MsgKey,
-        payload = Payload,
-        msg_ts = Ts
-    },
-    State
-) ->
-    {ok, Seqno} = emqx_ecq_store:append(ClientID, MsgKey, Payload, Ts),
-    {ok, Seqno, State}.
-
-%% Lookup session registry to find if the consumer client is online. If yes, send the notification to the connected node.
+%% Lookup session registry to find if the consumer client is online.
+%% If yes, send the notification to the connected node.
 maybe_notify_reader(ClientID) ->
     case emqx_cm:lookup_channels(ClientID) of
         [] ->

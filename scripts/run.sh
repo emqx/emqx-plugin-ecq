@@ -57,10 +57,7 @@ cleanup
 docker network create "$NET"
 
 case "$IMAGE" in
-    emqx/emqx-enterprise:5.8*)
-        LICENSE_KEY="default"
-        ;;
-    emqx/emqx-enterprise:5.9*)
+    emqx/emqx-enterprise:5.10*)
         LICENSE_KEY="evaluation"
         ;;
     *)
@@ -87,7 +84,7 @@ function run_emqx() {
 
 run_emqx "$NODE1" "$NODE1" "core"
 run_emqx "$NODE2" "$NODE2" "core"
-run_emqx "$NODE3" "$NODE3" "replicant"
+run_emqx "$NODE3" "$NODE3" "core"
 
 mkdir -p tmp
 cat <<EOF > tmp/haproxy.cfg

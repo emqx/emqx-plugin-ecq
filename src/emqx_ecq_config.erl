@@ -10,7 +10,6 @@
 %% Config getters
 -export([
     get_data_retention/0,
-    get_gc_interval/0,
     my_role/0,
     get_reader_batch_size/0,
     get_write_timeout/0,
@@ -51,12 +50,6 @@ parse(Config) ->
 get_data_retention() ->
     maps:get(data_retention, get()).
 
-%% @doc Get the garbage collection interval.
-%% Duration in milliseconds.
--spec get_gc_interval() -> integer().
-get_gc_interval() ->
-    maps:get(gc_interval, get()).
-
 %% @doc Get the reader batch size.
 -spec get_reader_batch_size() -> integer().
 get_reader_batch_size() ->
@@ -74,8 +67,6 @@ get_read_timeout() ->
 
 parse(<<"data_retention">>, Str) ->
     {data_retention, to_duration_ms(Str)};
-parse(<<"gc_interval">>, Str) ->
-    {gc_interval, to_duration_ms(Str)};
 parse(<<"writer_pool_size">>, Size) ->
     (Size < 0 orelse Size > 10240) andalso throw("invalid_writer_pool_size"),
     {writer_pool_size, Size};
