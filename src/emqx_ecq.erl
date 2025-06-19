@@ -110,12 +110,13 @@ on_message_publish(Message) ->
 %% @doc
 %% Called when PUBACK is received from the subscriber (vehicle).
 on_delivery_completed(
-    #message{topic = <<?ECQ_TOPIC_PREFIX, $/, _/binary>>} = Message, _
+    #message{topic = <<?ECQ_TOPIC_PREFIX, $/, _/binary>>, timestamp = Ts} = Message, _
 ) ->
     case get_seqno(Message) of
         error ->
             ok;
         Seqno when is_integer(Seqno) ->
+            ok = emqx_ecq_metrics:observe_delivery_latency(ack, Ts),
             ok = emqx_ecq_reader:acked(Seqno)
     end;
 on_delivery_completed(_, _) ->

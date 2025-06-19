@@ -25,6 +25,7 @@
 ]).
 
 -include("emqx_ecq.hrl").
+-include_lib("emqx_plugin_helper/include/emqx_message.hrl").
 
 -record(poll_notification, {}).
 
@@ -252,9 +253,10 @@ deliver_batch(ClientID, SubPid, Msgs) ->
     ok.
 
 deliver_to_subscriber(SubPid, ClientID, Msg) ->
-    #{seqno := Seqno, msg_key := MsgKey, payload := Payload} = Msg,
+    #{seqno := Seqno, msg_key := MsgKey, payload := Payload, ts := Ts} = Msg,
     Topic = pub_topic(ClientID, MsgKey),
-    Message = make_message(Topic, Payload, Seqno),
+    Message = make_message(Topic, Payload, Seqno, Ts),
+    ok = emqx_ecq_metrics:observe_delivery_latency(forward, Ts),
     _ = erlang:send(SubPid, {deliver, Topic, Message}),
     ?LOG(debug, "message_forwarded_to_subscriber", #{
         msg_key => MsgKey,
@@ -276,12 +278,13 @@ update_reader_pd(Seqno) ->
     put(?READER_PD_KEY, PD2),
     ok.
 
-make_message(Topic, Payload, Seqno) ->
+make_message(Topic, Payload, Seqno, Ts) ->
     From = <<"ECQ">>,
     Qos = 1,
     Headers = make_headers(Seqno),
     Flags = #{},
-    emqx_message:make(From, Qos, Topic, Payload, Flags, Headers).
+    Message = emqx_message:make(From, Qos, Topic, Payload, Flags, Headers),
+    Message#message{timestamp = Ts}.
 
 make_headers(Seqno) ->
     Props = #{'User-Property' => [{<<"ecq-seqno">>, integer_to_binary(Seqno)}]},

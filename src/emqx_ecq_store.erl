@@ -56,11 +56,14 @@
     lts_threshold_spec => {simple, {100, 0, 10}}
 }).
 
+-define(SHARDS_PER_SITE, 4).
+-define(REPLICATION_FACTOR, 3).
+
 %% Types
 
 -type iterator() :: term().
 
--type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary()}.
+-type msg() :: #{seqno := seqno(), msg_key := msg_key(), payload := binary(), ts := ts()}.
 
 -type read_state() :: #{it := iterator() | undefined, clientid := binary()}.
 
@@ -94,7 +97,7 @@ append(ClientID, MsgKey, Payload, Ts) ->
         emqx_ds:tx_del_topic(PayloadTopic),
         emqx_ds:tx_write({PayloadTopic, ?ds_tx_ts_monotonic, PayloadBin})
     end,
-    case emqx_ds:trans(TxOpts, TxFun) of
+    case emqx_ecq_metrics:trans(append, TxOpts, TxFun) of
         {atomic, _Serial, ok} ->
             ok;
         {error, IsRecoverable, Reason} ->
@@ -122,7 +125,11 @@ fetch_batch(ReadState, Limit) ->
         {ok, undefined} ->
             {ok, [], ReadState};
         {ok, It0} ->
-            case emqx_ds:next(?DB_PAYLOAD, It0, Limit) of
+            case
+                emqx_ecq_metrics:observe(ds_latency, read_batch, emqx_ds, next, [
+                    ?DB_PAYLOAD, It0, Limit
+                ])
+            of
                 {ok, It, Values} ->
                     Msgs = lists:map(fun unpack_msg/1, Values),
                     {ok, Msgs, ReadState#{it => It}};
@@ -139,7 +146,14 @@ get_iterator(#{clientid := ClientID, it := undefined} = _ReadState) ->
     Filter = ?MSG_KEY_TOPIC(ClientID, '#'),
     Shard = emqx_ds:shard_of(?DB_PAYLOAD, ClientID),
     maybe
-        {[{_Slab, Stream}], []} ?= emqx_ds:get_streams(?DB_PAYLOAD, Filter, 0, #{shard => Shard}),
+        {[{_Slab, Stream}], []} ?=
+            emqx_ecq_metrics:observe(
+                ds_latency,
+                get_streams,
+                emqx_ds,
+                get_streams,
+                [?DB_PAYLOAD, Filter, 0, #{shard => Shard}]
+            ),
         ?LOG(debug, "found_stream", #{stream => Stream, shard => Shard}),
         {ok, It} ?= emqx_ds:make_iterator(?DB_PAYLOAD, Stream, Filter, 0),
         {ok, It}
@@ -170,7 +184,7 @@ init_read_state(ClientID) ->
     TxFun = fun() ->
         emqx_ds:tx_read(?READ_STATE_TOPIC(ClientID))
     end,
-    case emqx_ds:trans(TxOpts, TxFun) of
+    case emqx_ecq_metrics:trans(init_read_state, TxOpts, TxFun) of
         {atomic, _Serial, Values} ->
             case Values of
                 [{_Topic, 0, Bin}] ->
@@ -183,21 +197,22 @@ init_read_state(ClientID) ->
     end.
 
 db_settings(LtsSettings) ->
+    NSites = length(emqx:running_nodes()),
     #{
         transaction =>
             #{
                 flush_interval => 100,
                 idle_flush_interval => 20,
-                conflict_window => 10_000
+                conflict_window => 5000
             },
         storage =>
             {emqx_ds_storage_skipstream_lts_v2, LtsSettings},
         store_ttv => true,
         backend => builtin_raft,
-        n_shards => 16,
+        n_shards => NSites * ?SHARDS_PER_SITE,
         replication_options => #{},
-        n_sites => 3,
-        replication_factor => 1
+        n_sites => NSites,
+        replication_factor => ?REPLICATION_FACTOR
     }.
 
 open_db(DB, Settings) ->
@@ -221,7 +236,7 @@ persist_read_state(#{clientid := ClientID} = ReadState) ->
     TxFun = fun() ->
         emqx_ds:tx_write({?READ_STATE_TOPIC(ClientID), 0, Bin})
     end,
-    case emqx_ds:trans(TxOpts, TxFun) of
+    case emqx_ecq_metrics:trans(persist_read_state, TxOpts, TxFun) of
         {atomic, _Serial, Res} ->
             Res;
         {error, IsRecoverable, Reason} ->
@@ -243,16 +258,16 @@ pack_msg(Payload, Ts) ->
     }).
 
 unpack_msg({_DSKey, {?MSG_KEY_TOPIC(_ClientID, MsgKey), Seqno, Payload}}) ->
-    %% NOTE
-    %% By far we do not need Ts that came from the message
     #{
         ?msg_schema_version := ?SCHEMA_VERSION,
-        ?msg_payload := Value
+        ?msg_payload := Value,
+        ?msg_ts := Ts
     } = binary_to_term(Payload),
     #{
         seqno => Seqno,
         msg_key => MsgKey,
-        payload => Value
+        payload => Value,
+        ts => Ts
     }.
 
 pack_read_state(#{it := It}) ->

@@ -121,6 +121,43 @@ t_connection_restoration(_Config) ->
     ok = stop_client(PubPid),
     ok = stop_client(SubPid1).
 
+t_metrics_format(_Config) ->
+    meck:new(emqx_ecq_metrics, [passthrough]),
+    meck:expect(emqx_ecq_metrics, get_metrics, fun(_) ->
+        #{
+            counters => #{},
+            rate => #{},
+            gauges => #{},
+            hists =>
+                #{
+                    append =>
+                        #{
+                            count => 1754,
+                            sum => 266440,
+                            bucket_counts =>
+                                [
+                                    {10, 0},
+                                    {20, 0},
+                                    {50, 111},
+                                    {100, 209},
+                                    {200, 1401},
+                                    {500, 1754},
+                                    {1000, 1754},
+                                    {2000, 1754},
+                                    {5000, 1754},
+                                    {10000, 1754},
+                                    {20000, 1754},
+                                    {infinity, 1754}
+                                ]
+                        }
+                },
+            slides => #{}
+        }
+    end),
+    IoData = emqx_ecq_metrics:format_hist(ds_latency, append),
+    ct:print("~s", [IoData]),
+    meck:unload(emqx_ecq_metrics).
+
 %% Publish many messages to many keys.
 t_massive_publishes(_Config) ->
     %% Parameters.

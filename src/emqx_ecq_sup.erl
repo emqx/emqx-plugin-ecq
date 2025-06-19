@@ -32,7 +32,9 @@ init([_MyRole]) ->
         modules => [emqx_ecq]
     },
     ReaderRegPoolSupSpec = reader_reg_table_sup_spec(),
+    MetricsWorkerSpec = emqx_ecq_metrics:spec(),
     Children = [
+        MetricsWorkerSpec,
         ConfigChildSpec,
         ReaderRegPoolSupSpec
     ],
